@@ -1,0 +1,40 @@
+{
+  "slide_width_in": 5.625,
+  "slide_height_in": 7.5,
+  "font_family": "Noto Sans CJK KR",
+  "brand": "SRC Plus",
+  "category_labels": {
+    "insights": "Insight",
+    "issues": "Issue",
+    "sectors": "Sector"
+  },
+  "image_source": "AI로 생성된 이미지입니다",
+  "cover": {
+    "title_size": 40,
+    "title_left": 0.3937,
+    "title_top": 4.2786,
+    "title_width": 4.8376,
+    "title_height": 2.0195,
+    "subtitle_top": 6.4279,
+    "subtitle_height": 0.2693
+  },
+  "body": {
+    "title_size": 28,
+    "body_size": 12,
+    "title_left": 0.3937,
+    "title_top": 4.9132,
+    "title_width": 4.8376,
+    "title_height": 0.4713,
+    "body_top": 5.6537,
+    "body_height": 1.1768,
+    "line_spacing": 1.5
+  },
+  "cta": {
+    "font_size": 14,
+    "left": 0.3937,
+    "top": 3.0635,
+    "width": 4.8376,
+    "height": 1.373,
+    "overlay_alpha": 158
+  }
+}

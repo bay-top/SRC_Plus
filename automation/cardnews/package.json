@@ -1,0 +1,17 @@
+{
+  "name": "srcplus-cardnews-automation",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev --config wrangler.generated.jsonc",
+    "typecheck": "tsc --noEmit",
+    "generate:config": "node scripts/generate-wrangler.mjs",
+    "db:local": "wrangler d1 migrations apply cardnews-db --local --config wrangler.generated.jsonc",
+    "db:remote": "wrangler d1 migrations apply cardnews-db --remote --config wrangler.generated.jsonc",
+    "deploy": "wrangler deploy --config wrangler.generated.jsonc"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.3",
+    "wrangler": "^4.0.0"
+  }
+}
