@@ -52,7 +52,7 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
             errors.append("표지 제목과 부제가 중복됐습니다.")
 
     seen_titles: set[str] = set()
-    seen_sentences: set[str] = set()
+    seen_sentences: list[str] = []
     cover_title = comparable(str(covers[0].get("title", ""))) if covers else ""
     for index, page in enumerate(bodies, start=1):
         title = str(page.get("title", "")).strip()
@@ -69,13 +69,19 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
             errors.append(f"본문 {index} 제목이 다른 페이지와 중복됐습니다.")
         if normalized_title == comparable(body):
             errors.append(f"본문 {index} 제목과 내용이 중복됐습니다.")
+        if re.search(r"src[_ ]?plus|무료로|더 자세한 이야기|페이지에서", body, re.I):
+            errors.append(f"본문 {index}에 홍보·CTA 문구가 포함됐습니다.")
         for sentence in sentences(body):
-            if sentence in seen_sentences:
+            if any(seen in sentence or sentence in seen for seen in seen_sentences):
                 errors.append(f"본문 {index}이 앞 페이지 문장을 반복했습니다.")
-            seen_sentences.add(sentence)
+            seen_sentences.append(sentence)
         seen_titles.add(normalized_title)
 
-    if ctas and len(str(ctas[0].get("title", "")).strip()) > limits["cta_subject_max_chars"]:
-        errors.append("CTA 주제 글자 수가 중앙 기준을 초과했습니다.")
+    if ctas:
+        cta_subject = str(ctas[0].get("title", "")).strip()
+        if len(cta_subject) > limits["cta_subject_max_chars"]:
+            errors.append("CTA 주제 글자 수가 중앙 기준을 초과했습니다.")
+        if re.search(r"src[_ ]?plus|무료|만나보|리포트", cta_subject, re.I):
+            errors.append("CTA 주제에 홍보 문구가 포함됐습니다.")
     if errors:
         raise ValueError("카드뉴스 편집 기준 위반:\n- " + "\n- ".join(errors))
