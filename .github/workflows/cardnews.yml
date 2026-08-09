@@ -93,7 +93,7 @@ jobs:
           --design automation/cardnews/config/design.json
           --output /tmp/cardnews/out/cardnews.pptx
       - name: Render PNG slides
-        run: automation/cardnews/pipeline/render_slides.sh /tmp/cardnews/out/cardnews.pptx /tmp/cardnews/out
+        run: bash automation/cardnews/pipeline/render_slides.sh /tmp/cardnews/out/cardnews.pptx /tmp/cardnews/out
       - name: Upload final files
         run: |
           python automation/cardnews/pipeline/r2_io.py upload /tmp/cardnews/out/cardnews.pptx "jobs/$JOB_ID/final/cardnews.pptx" --content-type application/vnd.openxmlformats-officedocument.presentationml.presentation

@@ -55,7 +55,7 @@ jobs:
           workingDirectory: automation/cardnews
           command: deploy --config wrangler.generated.jsonc
       - name: Register Telegram webhook
-        run: scripts/set_webhook.sh
+        run: bash scripts/set_webhook.sh
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
