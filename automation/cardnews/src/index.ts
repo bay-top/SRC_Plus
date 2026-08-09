@@ -321,6 +321,7 @@ async function dispatchGithub(env: Env, action: 'parse' | 'render', jobId: strin
 }
 
 function draftSchema(): Record<string, unknown> {
+  const { limits } = editorialRules;
   const visualProperties = {
     visual_style: { type: 'string', enum: ['photo', 'illustration'] },
     visual_brief_ko: { type: 'string' },
@@ -333,18 +334,26 @@ function draftSchema(): Record<string, unknown> {
       category: { type: 'string', enum: ['insights', 'issues', 'sectors'] },
       cover: {
         type: 'object',
-        properties: { title: { type: 'string' }, subtitle: { type: 'string' }, ...visualProperties },
+        properties: {
+          title: { type: 'string', maxLength: limits.cover_title_max_chars },
+          subtitle: { type: 'string', minLength: limits.cover_subtitle_min_chars, maxLength: limits.cover_subtitle_max_chars },
+          ...visualProperties,
+        },
         required: ['title', 'subtitle', 'visual_style', 'visual_brief_ko', 'visual_prompt'],
       },
       body_pages: {
         type: 'array', minItems: editorialRules.structure.body_pages_min, maxItems: editorialRules.structure.body_pages_max,
         items: {
           type: 'object',
-          properties: { title: { type: 'string' }, body: { type: 'string' }, ...visualProperties },
+          properties: {
+            title: { type: 'string', minLength: limits.body_title_min_chars, maxLength: limits.body_title_max_chars },
+            body: { type: 'string', minLength: limits.body_min_chars, maxLength: limits.body_max_chars },
+            ...visualProperties,
+          },
           required: ['title', 'body', 'visual_style', 'visual_brief_ko', 'visual_prompt'],
         },
       },
-      cta_subject: { type: 'string' },
+      cta_subject: { type: 'string', maxLength: limits.cta_subject_max_chars },
     },
     required: ['report_title', 'category', 'cover', 'body_pages', 'cta_subject'],
   };
@@ -415,15 +424,30 @@ visual_brief_ko는 사용자가 검토할 한국어 이미지 설명이다.
 visual_prompt는 이미지 모델용 영어만 사용한다. 특정 기업명·브랜드명·로고·간판·제품명을 넣지 말고, 기업 사례는 일반적인 산업·공간 장면으로 바꾼다.
 실제 장면이 자연스러우면 photo를 우선하고, 개념 관계를 사진으로 표현하기 어려울 때만 illustration을 사용한다.
 이미지 안에 글자, 숫자, 로고, 워터마크, 간판이 없어야 하며 아래쪽은 카드 텍스트를 놓기 쉬운 단순한 구도로 둔다.`;
-  const user = `구조화된 리포트 JSON:\n${clamp(JSON.stringify(source), 42000)}\n\n현재 초안:\n${previous.length ? clamp(JSON.stringify(previous.map((p) => ({ page_no: p.page_no, page_kind: p.page_kind, title: p.title, body: p.body, visual_style: p.visual_style, visual_brief_ko: p.visual_brief_ko, visual_prompt: p.visual_prompt }))), 18000) : '없음'}\n\n수정 지시:\n${instruction ?? '새 카드뉴스 초안을 작성하라.'}`;
-  const result = await env.AI.run(env.TEXT_MODEL, {
-    messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-    temperature: 0.2,
-    max_tokens: 4000,
-    response_format: { type: 'json_schema', json_schema: draftSchema() },
-  }) as { response?: AiDraft };
-  if (!result.response) throw new Error('Workers AI가 구조화 응답을 반환하지 않았습니다.');
-  return normalizeDraft(result.response);
+  const baseUser = `구조화된 리포트 JSON:\n${clamp(JSON.stringify(source), 42000)}\n\n현재 초안:\n${previous.length ? clamp(JSON.stringify(previous.map((p) => ({ page_no: p.page_no, page_kind: p.page_kind, title: p.title, body: p.body, visual_style: p.visual_style, visual_brief_ko: p.visual_brief_ko, visual_prompt: p.visual_prompt }))), 18000) : '없음'}\n\n수정 지시:\n${instruction ?? '새 카드뉴스 초안을 작성하라.'}`;
+  let correction = '';
+  let lastError = 'Workers AI가 유효한 카드뉴스를 반환하지 않았습니다.';
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const user = `${baseUser}${correction ? `\n\n직전 응답의 검증 실패:\n${correction}\n중앙 규칙을 다시 확인하고 모든 필드를 처음부터 교정하라.` : ''}`;
+    const result = await env.AI.run(env.TEXT_MODEL, {
+      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
+      temperature: attempt === 1 ? 0.2 : 0.1,
+      max_tokens: 4000,
+      response_format: { type: 'json_schema', json_schema: draftSchema() },
+    }) as { response?: AiDraft };
+    if (!result.response) {
+      correction = '구조화 응답이 비어 있습니다.';
+      lastError = correction;
+      continue;
+    }
+    try {
+      return normalizeDraft(result.response);
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      correction = `${lastError}\n직전 응답: ${clamp(JSON.stringify(result.response), 12000)}`;
+    }
+  }
+  throw new Error(`AI 초안 자동 교정 실패: ${lastError}`);
 }
 async function replacePages(env: Env, jobId: string, draft: AiDraft): Promise<void> {
   const pages: Array<Omit<PageRow, 'job_id' | 'image_a_key' | 'image_b_key' | 'selected_key' | 'qa_a_json' | 'qa_b_json' | 'status'>> = [];
