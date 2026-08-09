@@ -1,0 +1,110 @@
+name: SRC Plus cardnews pipeline
+
+on:
+  repository_dispatch:
+    types: [cardnews_job]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: cardnews-${{ github.event.client_payload.job_id }}-${{ github.event.client_payload.action }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  parse:
+    if: github.event.client_payload.action == 'parse'
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    env:
+      JOB_ID: ${{ github.event.client_payload.job_id }}
+      SOURCE_PATH: ${{ github.event.client_payload.source_path }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: cardnews-assets
+      WORKER_CALLBACK_URL: ${{ secrets.CARDNEWS_WORKER_BASE_URL }}/api/callback
+      CALLBACK_HMAC_SECRET: ${{ secrets.CARDNEWS_CALLBACK_HMAC_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: automation/cardnews/pipeline/requirements.txt
+      - run: pip install -r automation/cardnews/pipeline/requirements.txt
+      - name: Validate source path
+        run: |
+          case "$SOURCE_PATH" in
+            reports_*.html) ;;
+            *) echo "Invalid source path: $SOURCE_PATH" >&2; exit 2 ;;
+          esac
+          test -f "$SOURCE_PATH"
+      - name: Parse final HTML
+        run: python automation/cardnews/pipeline/parse_report.py --input "$SOURCE_PATH" --output /tmp/source.json
+      - name: Upload parsed source
+        run: python automation/cardnews/pipeline/r2_io.py upload /tmp/source.json "jobs/$JOB_ID/source.json" --content-type application/json
+      - name: Notify Worker
+        run: python automation/cardnews/pipeline/callback.py --job-id "$JOB_ID" --stage SOURCE_PARSED --source-key "jobs/$JOB_ID/source.json"
+      - name: Notify failure
+        if: failure()
+        run: >-
+          python automation/cardnews/pipeline/callback.py --job-id "$JOB_ID" --stage FAILED
+          --error "Parse workflow failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+
+  render:
+    if: github.event.client_payload.action == 'render'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      JOB_ID: ${{ github.event.client_payload.job_id }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: cardnews-assets
+      WORKER_CALLBACK_URL: ${{ secrets.CARDNEWS_WORKER_BASE_URL }}/api/callback
+      CALLBACK_HMAC_SECRET: ${{ secrets.CARDNEWS_CALLBACK_HMAC_SECRET }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: automation/cardnews/pipeline/requirements.txt
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libreoffice-impress poppler-utils fonts-noto-cjk zip
+      - run: pip install -r automation/cardnews/pipeline/requirements.txt
+      - name: Download manifest and images
+        run: |
+          mkdir -p /tmp/cardnews/assets /tmp/cardnews/out
+          python automation/cardnews/pipeline/r2_io.py download "jobs/$JOB_ID/render-manifest.json" /tmp/cardnews/manifest.json
+          python automation/cardnews/pipeline/r2_io.py download-manifest-assets /tmp/cardnews/manifest.json /tmp/cardnews/assets
+      - name: Build SRC Plus PPTX
+        run: >-
+          python automation/cardnews/pipeline/build_deck.py
+          --manifest /tmp/cardnews/manifest.json
+          --assets /tmp/cardnews/assets
+          --design automation/cardnews/config/design.json
+          --output /tmp/cardnews/out/cardnews.pptx
+      - name: Render PNG slides
+        run: automation/cardnews/pipeline/render_slides.sh /tmp/cardnews/out/cardnews.pptx /tmp/cardnews/out
+      - name: Upload final files
+        run: |
+          python automation/cardnews/pipeline/r2_io.py upload /tmp/cardnews/out/cardnews.pptx "jobs/$JOB_ID/final/cardnews.pptx" --content-type application/vnd.openxmlformats-officedocument.presentationml.presentation
+          python automation/cardnews/pipeline/r2_io.py upload /tmp/cardnews/out/slides.zip "jobs/$JOB_ID/final/slides.zip" --content-type application/zip
+      - name: Notify Worker
+        run: >-
+          python automation/cardnews/pipeline/callback.py --job-id "$JOB_ID" --stage RENDERED
+          --pptx-key "jobs/$JOB_ID/final/cardnews.pptx"
+          --zip-key "jobs/$JOB_ID/final/slides.zip"
+      - name: Notify failure
+        if: failure()
+        run: >-
+          python automation/cardnews/pipeline/callback.py --job-id "$JOB_ID" --stage FAILED
+          --error "Render workflow failed: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"

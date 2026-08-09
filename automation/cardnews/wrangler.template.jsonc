@@ -1,0 +1,48 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "srcplus-cardnews",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "ai": { "binding": "AI" },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "cardnews-db",
+      "database_id": "__D1_DATABASE_ID__",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "ASSETS",
+      "bucket_name": "cardnews-assets"
+    }
+  ],
+  "queues": {
+    "producers": [
+      { "binding": "JOBS", "queue": "cardnews-jobs" }
+    ],
+    "consumers": [
+      {
+        "queue": "cardnews-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 5,
+        "max_retries": 3,
+        "dead_letter_queue": "cardnews-jobs-dlq"
+      }
+    ]
+  },
+  "vars": {
+    "GITHUB_OWNER": "bay-top",
+    "GITHUB_REPO": "SRC_Plus",
+    "GITHUB_BRANCH": "main",
+    "ALLOWED_CHAT_ID": "",
+    "TEXT_MODEL": "@cf/meta/llama-3.1-8b-instruct-fast",
+    "IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-4b",
+    "VISION_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct",
+    "VISION_QA_MODE": "advisory",
+    "IMAGE_WIDTH": "768",
+    "IMAGE_HEIGHT": "1024"
+  }
+}

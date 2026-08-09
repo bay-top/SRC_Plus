@@ -1,0 +1,61 @@
+name: Deploy SRC Plus cardnews Worker
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: automation/cardnews
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install
+      - name: Generate Wrangler config
+        run: npm run generate:config
+        env:
+          CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
+      - run: npm run typecheck
+      - name: Apply D1 migrations
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: automation/cardnews
+          command: d1 migrations apply cardnews-db --remote --config wrangler.generated.jsonc
+      - name: Deploy Worker and secrets
+        uses: cloudflare/wrangler-action@v3
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          workingDirectory: automation/cardnews
+          command: deploy --config wrangler.generated.jsonc
+          secrets: |
+            TELEGRAM_BOT_TOKEN
+            TELEGRAM_WEBHOOK_SECRET
+            GITHUB_TOKEN
+            CALLBACK_HMAC_SECRET
+            SETUP_TOKEN
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          GITHUB_TOKEN: ${{ secrets.CARDNEWS_GITHUB_PAT }}
+          CALLBACK_HMAC_SECRET: ${{ secrets.CARDNEWS_CALLBACK_HMAC_SECRET }}
+          SETUP_TOKEN: ${{ secrets.CARDNEWS_SETUP_TOKEN }}
+      - name: Register Telegram webhook
+        run: scripts/set_webhook.sh
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          WORKER_BASE_URL: ${{ secrets.CARDNEWS_WORKER_BASE_URL }}
+      - name: Health check
+        run: curl --fail-with-body --retry 5 --retry-delay 3 "${CARDNEWS_WORKER_BASE_URL%/}/health"
+        env:
+          CARDNEWS_WORKER_BASE_URL: ${{ secrets.CARDNEWS_WORKER_BASE_URL }}
