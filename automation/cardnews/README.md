@@ -78,7 +78,7 @@ Cloudflare 계정에만 범위를 제한한 API Token을 생성한다. Worker �
 
 ### 4. GitHub fine-grained PAT
 
-Worker가 `repository_dispatch`를 호출할 수 있도록 `JBChoi-01/SRC_Plus` 한 저장소에만 제한한 fine-grained PAT를 만든다.
+Worker가 `repository_dispatch`를 호출할 수 있도록 `bay-top/SRC_Plus` 한 저장소에만 제한한 fine-grained PAT를 만든다.
 
 - Repository permissions → Contents: Read and write
 - Metadata: Read
@@ -109,6 +109,30 @@ R2_SECRET_ACCESS_KEY
 2. Actions → `Deploy SRC Plus cardnews Worker` → Run workflow
 3. D1 migration, Worker 배포, Worker secret 등록, Telegram webhook 등록, health check가 순서대로 실행된다.
 4. Telegram에서 `/claim ...` 후 `/new`로 테스트한다.
+
+배포 워크플로는 `.github/workflows/cardnews-cloudflare-deploy.yml`에 있다. 수동 실행만 허용하며 Node.js 22에서 Wrangler 설정 생성과 타입 검사를 마친 뒤 D1 migration, Worker 배포, Telegram webhook 등록, health check를 수행한다.
+
+## GitHub Actions 파이프라인
+
+`.github/workflows/cardnews.yml`은 Worker가 보내는 `repository_dispatch`의 `cardnews_job` 이벤트를 처리한다.
+
+- `action: parse`: `reports_*.html` 경로를 검증하고 구조화 JSON을 R2에 저장한 뒤 `SOURCE_PARSED` callback을 보낸다.
+- `action: render`: render manifest와 이미지를 R2에서 받아 PPTX와 PNG ZIP을 만들고 `RENDERED` callback을 보낸다.
+- 두 job 모두 실패하면 실행 URL을 포함한 `FAILED` callback을 보낸다.
+- 같은 job과 action 조합은 concurrency group으로 묶되 실행 중인 작업을 자동 취소하지 않는다.
+
+## 로컬 검증
+
+Node.js 의존성과 Wrangler 설정을 준비한 뒤 타입 검사를 실행한다.
+
+```bash
+cd automation/cardnews
+npm install
+npm run generate:config
+npm run typecheck
+```
+
+`wrangler.generated.jsonc`, `.dev.vars`, `node_modules`, Wrangler 상태 파일과 Python 캐시는 `automation/cardnews/.gitignore`에서 제외한다. 실제 비밀값은 생성된 설정 파일이나 커밋에 넣지 않는다.
 
 ## 이미지 QA
 
