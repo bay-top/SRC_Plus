@@ -4,11 +4,17 @@
 
 ## 반영된 운영 규칙
 
+문구의 단일 기준은 `config/editorial.json`이다. Worker의 최초 생성·수정·전체 재생성, HTML 구조화 파서, PPT 렌더 직전 검증이 모두 이 파일을 읽는다. 글자 수나 문체를 바꿀 때는 다른 프롬프트를 직접 수정하지 않고 이 파일만 변경한다.
+
 - 저장소 루트의 `reports_*.html`만 탐색
 - `_PREVIEW` 파일 제외
 - `report-meta.published === true` 파일만 표시
 - 표지 1장 + 본문 3~5장 + 고정 안내 페이지 1장
 - 모든 사용자 노출 문구는 한국어 중심, `~이다/~한다` 단문 서술체
+- 표지 제목 36자 이하, 표지 부제 12~55자, 본문 제목 6~36자
+- 본문은 페이지당 2~3문장, 70~220자
+- 표지·부제·본문 1을 반복하지 않고 본문마다 배경·근거·변화·시사점·판단 기준 중 서로 다른 역할 부여
+- 중앙 설정의 좋은/나쁜 예시는 형식과 톤에만 사용하며 예시의 주제·사실·표현은 복사하지 않음
 - 공식 약어와 업계에서 일반적으로 쓰는 영어 표현만 유지
 - 마지막 안내 페이지 문구는 `cta_subject` 한 구절을 제외하고 고정
 - 마지막 안내 페이지는 직전 본문 페이지와 같은 이미지를 재사용
@@ -130,6 +136,7 @@ cd automation/cardnews
 npm install
 npm run generate:config
 npm run typecheck
+python -m unittest discover -s pipeline -p "test_*.py"
 ```
 
 `wrangler.generated.jsonc`, `.dev.vars`, `node_modules`, Wrangler 상태 파일과 Python 캐시는 `automation/cardnews/.gitignore`에서 제외한다. 실제 비밀값은 생성된 설정 파일이나 커밋에 넣지 않는다.
@@ -156,6 +163,8 @@ Cloudflare의 `@cf/meta/llama-3.2-11b-vision-instruct`는 최초 사용 전에 M
 - 검은 상·하단 그라데이션
 - 마지막 안내 페이지 전체 암막
 - 마지막 본문 이미지 재사용
+
+PPT 생성 전 `pipeline/editorial_rules.py`가 `config/editorial.json`을 다시 읽어 페이지 수, 글자 수, 문장 수, 표지·본문 제목 중복을 검사한다. 기준을 벗어난 manifest는 넘치는 텍스트를 억지로 렌더링하지 않고 작업을 실패시켜 검토 대상으로 남긴다.
 
 GitHub runner에는 Pretendard가 기본 설치되지 않으므로 현재 자동 렌더링은 `Noto Sans CJK KR`을 사용한다. 추가 PPT 3~5개의 반복 규칙이 확인되면 위치·문장 길이·카테고리 단복수 표기를 `config/design.json`에서 보정한다.
 

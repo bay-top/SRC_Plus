@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from bs4 import BeautifulSoup, Tag
+from editorial_rules import load_editorial_rules
 
 META_PATTERN = re.compile(r'<script[^>]+id=["\']report-meta["\'][^>]*>(.*?)</script>', re.I | re.S)
 
@@ -73,7 +74,7 @@ def section_priority(heading: str, blocks: list[dict[str, Any]]) -> int:
     return score
 
 
-def parse_html(path: Path) -> dict[str, Any]:
+def parse_html(path: Path, editorial_path: Path) -> dict[str, Any]:
     html = path.read_text(encoding="utf-8", errors="replace")
     meta = parse_meta(html)
     soup = BeautifulSoup(html, "lxml")
@@ -144,12 +145,7 @@ def parse_html(path: Path) -> dict[str, Any]:
         "lead": lead,
         "sections": compact,
         "character_count": used,
-        "cardnews_rules": {
-            "language": "한국어 중심",
-            "tone": "~이다/~한다 단문 서술체",
-            "structure": "표지 1장 + 본문 3~5장 + 고정 안내 1장",
-            "selection": "전체 요약이 아니라 핵심 구조·수치·판단 포인트 선별",
-        },
+        "cardnews_rules": load_editorial_rules(editorial_path),
     }
 
 
@@ -157,10 +153,11 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--editorial", required=True, type=Path)
     args = parser.parse_args()
     if not args.input.exists():
         raise SystemExit(f"Input file not found: {args.input}")
-    result = parse_html(args.input)
+    result = parse_html(args.input, args.editorial)
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
     print(f"Parsed {args.input} -> {args.output} ({result['character_count']} chars)")

@@ -37,6 +37,8 @@ jobs:
           cache: pip
           cache-dependency-path: automation/cardnews/pipeline/requirements.txt
       - run: pip install -r automation/cardnews/pipeline/requirements.txt
+      - name: Validate centralized editorial rules
+        run: python -m unittest discover -s automation/cardnews/pipeline -p "test_*.py"
       - name: Validate source path
         run: |
           case "$SOURCE_PATH" in
@@ -45,7 +47,11 @@ jobs:
           esac
           test -f "$SOURCE_PATH"
       - name: Parse final HTML
-        run: python automation/cardnews/pipeline/parse_report.py --input "$SOURCE_PATH" --output /tmp/source.json
+        run: >-
+          python automation/cardnews/pipeline/parse_report.py
+          --input "$SOURCE_PATH"
+          --output /tmp/source.json
+          --editorial automation/cardnews/config/editorial.json
       - name: Upload parsed source
         run: python automation/cardnews/pipeline/r2_io.py upload /tmp/source.json "jobs/$JOB_ID/source.json" --content-type application/json
       - name: Notify Worker
@@ -80,6 +86,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libreoffice-impress poppler-utils fonts-noto-cjk zip
       - run: pip install -r automation/cardnews/pipeline/requirements.txt
+      - name: Validate centralized editorial rules
+        run: python -m unittest discover -s automation/cardnews/pipeline -p "test_*.py"
       - name: Download manifest and images
         run: |
           mkdir -p /tmp/cardnews/assets /tmp/cardnews/out
@@ -91,6 +99,7 @@ jobs:
           --manifest /tmp/cardnews/manifest.json
           --assets /tmp/cardnews/assets
           --design automation/cardnews/config/design.json
+          --editorial automation/cardnews/config/editorial.json
           --output /tmp/cardnews/out/cardnews.pptx
       - name: Render PNG slides
         run: bash automation/cardnews/pipeline/render_slides.sh /tmp/cardnews/out/cardnews.pptx /tmp/cardnews/out
