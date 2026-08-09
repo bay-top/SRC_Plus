@@ -54,6 +54,7 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
     seen_titles: set[str] = set()
     seen_sentences: list[str] = []
     cover_title = comparable(str(covers[0].get("title", ""))) if covers else ""
+    cover_subtitle = comparable(str(covers[0].get("body", ""))) if covers else ""
     for index, page in enumerate(bodies, start=1):
         title = str(page.get("title", "")).strip()
         body = str(page.get("body", "")).strip()
@@ -72,6 +73,8 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
         if re.search(r"src[_ ]?plus|무료로|더 자세한 이야기|페이지에서", body, re.I):
             errors.append(f"본문 {index}에 홍보·CTA 문구가 포함됐습니다.")
         for sentence in sentences(body):
+            if any(len(cover_text) >= 15 and (cover_text in sentence or sentence in cover_text) for cover_text in [cover_title, cover_subtitle]):
+                errors.append(f"본문 {index}이 표지 문구를 반복했습니다.")
             if any(seen in sentence or sentence in seen for seen in seen_sentences):
                 errors.append(f"본문 {index}이 앞 페이지 문장을 반복했습니다.")
             seen_sentences.append(sentence)
