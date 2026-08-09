@@ -201,9 +201,10 @@ async function telegramCall<T>(env: Env, method: string, body: BodyInit, headers
   if (!payload.ok) throw new Error(`Telegram ${method}: ${payload.description ?? response.status}`);
   return payload.result;
 }
-async function sendMessage(env: Env, chatId: string, text: string, buttons?: InlineButton[][]): Promise<{ message_id: number }> {
+async function sendMessage(env: Env, chatId: string, text: string, buttons?: InlineButton[][], forceReply = false): Promise<{ message_id: number }> {
   const payload: Record<string, unknown> = { chat_id: chatId, text, disable_web_page_preview: true };
   if (buttons) payload.reply_markup = { inline_keyboard: buttons };
+  else if (forceReply) payload.reply_markup = { force_reply: true, selective: true, input_field_placeholder: '수정할 내용을 입력하세요' };
   return telegramCall(env, 'sendMessage', JSON.stringify(payload), { 'content-type': 'application/json' });
 }
 async function sendLongMessage(env: Env, chatId: string, text: string): Promise<void> {
@@ -227,7 +228,7 @@ async function answerCallback(env: Env, id: string, text = '처리 중'): Promis
   await telegramCall(env, 'answerCallbackQuery', JSON.stringify({ callback_query_id: id, text }), { 'content-type': 'application/json' });
 }
 async function registerReply(env: Env, chatId: string, jobId: string, purpose: string, text: string): Promise<void> {
-  const message = await sendMessage(env, chatId, text);
+  const message = await sendMessage(env, chatId, text, undefined, true);
   await env.DB.prepare('INSERT OR REPLACE INTO telegram_prompts(chat_id,message_id,job_id,purpose) VALUES(?,?,?,?)')
     .bind(chatId, message.message_id, jobId, purpose).run();
 }
@@ -358,23 +359,37 @@ function validateVisualPrompt(value: string): string {
   if (/[가-힣]/.test(prompt)) throw new Error('이미지 프롬프트에 한국어가 포함됐습니다. 다시 생성합니다.');
   return prompt;
 }
+function comparable(value: string): string {
+  return value.toLocaleLowerCase('ko-KR').replace(/[^0-9a-z가-힣]/g, '');
+}
+function assertDifferent(left: string, right: string, fields: string): void {
+  if (comparable(left) === comparable(right)) throw new Error(`${fields}이(가) 서로 중복됐습니다. 다시 생성합니다.`);
+}
 function normalizeDraft(raw: AiDraft): AiDraft {
   if (!raw?.cover || !Array.isArray(raw.body_pages) || raw.body_pages.length < 3 || raw.body_pages.length > 5) throw new Error('AI 카드 구조가 유효하지 않습니다.');
   const cover = {
-    title: clamp(ensureKorean(String(raw.cover.title ?? ''), '표지 제목'), 70),
+    title: clamp(ensureKorean(String(raw.cover.title ?? ''), '표지 제목'), 36),
     subtitle: clamp(ensureKorean(String(raw.cover.subtitle ?? ''), '표지 부제'), 55),
     visual_style: raw.cover.visual_style === 'illustration' ? 'illustration' as const : 'photo' as const,
     visual_brief_ko: clamp(String(raw.cover.visual_brief_ko ?? '').trim(), 280),
     visual_prompt: validateVisualPrompt(String(raw.cover.visual_prompt ?? '')),
   };
   const bodyPages = raw.body_pages.map((page) => ({
-    title: clamp(ensureKorean(String(page.title ?? ''), '본문 제목'), 48),
-    body: clamp(ensureKorean(String(page.body ?? ''), '본문'), 280),
+    title: clamp(ensureKorean(String(page.title ?? ''), '본문 제목'), 36),
+    body: clamp(ensureKorean(String(page.body ?? ''), '본문'), 220),
     visual_style: page.visual_style === 'illustration' ? 'illustration' as const : 'photo' as const,
     visual_brief_ko: clamp(String(page.visual_brief_ko ?? '').trim(), 280),
     visual_prompt: validateVisualPrompt(String(page.visual_prompt ?? '')),
   }));
   if (!cover.title || !cover.subtitle || !cover.visual_brief_ko || bodyPages.some((p) => !p.title || !p.body || !p.visual_brief_ko)) throw new Error('AI가 빈 카드 필드를 반환했습니다.');
+  if (cover.subtitle.length < 12) throw new Error('표지 부제가 너무 짧습니다. 다시 생성합니다.');
+  assertDifferent(cover.title, cover.subtitle, '표지 제목과 부제');
+  for (const [index, page] of bodyPages.entries()) {
+    if (page.title.length < 6 || page.body.length < 70) throw new Error(`본문 ${index + 1}의 정보량이 카드 규격에 맞지 않습니다. 다시 생성합니다.`);
+    assertDifferent(page.title, page.body, `본문 ${index + 1}의 제목과 내용`);
+    assertDifferent(cover.title, page.title, `표지와 본문 ${index + 1} 제목`);
+  }
+  if (new Set(bodyPages.map((page) => comparable(page.title))).size !== bodyPages.length) throw new Error('본문 제목이 서로 중복됐습니다. 다시 생성합니다.');
   return {
     report_title: clamp(String(raw.report_title ?? cover.title).trim(), 120),
     category: ['insights', 'issues', 'sectors'].includes(raw.category) ? raw.category : 'issues',
@@ -386,11 +401,12 @@ function normalizeDraft(raw: AiDraft): AiDraft {
 async function createDraft(env: Env, source: unknown, previous: PageRow[], instruction?: string): Promise<AiDraft> {
   const system = `당신은 SRC Plus의 한국어 인스타그램 카드뉴스 편집자다.
 원문의 사실과 수치만 사용하고, 원문에 없는 해석이나 수치를 만들지 않는다.
-카드 구성은 표지 1장, 본문 3~5장, 고정 안내 페이지 1장이다. 안내 페이지 문장은 시스템이 만들므로 cta_subject만 명사구로 작성한다.
+카드 구성은 표지 1장, 본문 3~5장, 고정 안내 페이지 1장이다. 원문 분량에 맞춰 본문 수를 정하고 페이지 수를 채우기 위해 같은 내용을 반복하지 않는다. 안내 페이지 문장은 시스템이 만들므로 cta_subject만 명사구로 작성한다.
 리포트 전체를 기계적으로 요약하지 말고 독자가 흥미롭게 읽을 핵심 구조·수치·의사결정 포인트를 고른다.
 표지 제목과 본문 제목·문장은 한국어를 기본으로 한다. AI, IRU, ROIC, MFC처럼 업계에서 통용되는 공식 약어나 원문에서 일반적으로 쓰는 영어 표현만 유지한다.
-문체는 '~이다', '~한다', '~있다'의 건조한 단문 서술체다. 본문은 페이지당 2~4문장이고 모바일 카드에 맞게 간결하다.
-표지 subtitle은 한 줄의 한국어 설명이다. 각 본문 페이지에는 하나의 주장만 둔다.
+문체는 '~이다', '~한다', '~있다'의 건조한 단문 서술체다. 본문은 페이지당 2~3문장, 70~220자로 모바일에서 한눈에 읽히게 쓴다. 제목은 36자 이내다.
+표지는 결론을 설명하는 본문이 아니라 관심을 끄는 제목과 한 줄 부제만 둔다. 표지 제목과 부제는 같은 문장을 반복하지 않는다.
+본문 1은 표지를 되풀이하지 않고 독자가 주제를 이해하는 데 필요한 배경이나 핵심 문제부터 시작한다. 이후 본문은 근거·변화·시사점·판단 기준처럼 서로 다른 역할을 맡으며, 제목과 내용 및 본문 제목끼리 같은 문구를 반복하지 않는다. 각 본문 페이지에는 하나의 주장만 둔다.
 visual_brief_ko는 사용자가 검토할 한국어 이미지 설명이다.
 visual_prompt는 이미지 모델용 영어만 사용한다. 특정 기업명·브랜드명·로고·간판·제품명을 넣지 말고, 기업 사례는 일반적인 산업·공간 장면으로 바꾼다.
 실제 장면이 자연스러우면 photo를 우선하고, 개념 관계를 사진으로 표현하기 어려울 때만 illustration을 사용한다.
@@ -644,13 +660,16 @@ async function showJobs(env: Env, chatId: string): Promise<void> {
   await sendMessage(env, chatId, result.results.map((job) => `${job.id} · ${job.status}\n${fileName(job.source_path)}${job.last_error ? `\n${clamp(job.last_error, 120)}` : ''}`).join('\n\n'));
 }
 async function handleReply(env: Env, message: TelegramMessage): Promise<boolean> {
-  if (!message.text || !message.reply_to_message) return false;
-  const prompt = await env.DB.prepare('SELECT job_id,purpose FROM telegram_prompts WHERE chat_id=? AND message_id=?').bind(String(message.chat.id), message.reply_to_message.message_id).first<{ job_id: string; purpose: string }>();
+  if (!message.text) return false;
+  const chatId = String(message.chat.id);
+  const prompt = message.reply_to_message
+    ? await env.DB.prepare('SELECT message_id,job_id,purpose FROM telegram_prompts WHERE chat_id=? AND message_id=?').bind(chatId, message.reply_to_message.message_id).first<{ message_id: number; job_id: string; purpose: string }>()
+    : await env.DB.prepare('SELECT message_id,job_id,purpose FROM telegram_prompts WHERE chat_id=? ORDER BY created_at DESC LIMIT 1').bind(chatId).first<{ message_id: number; job_id: string; purpose: string }>();
   if (!prompt) return false;
-  await env.DB.prepare('DELETE FROM telegram_prompts WHERE chat_id=? AND message_id=?').bind(String(message.chat.id), message.reply_to_message.message_id).run();
+  await env.DB.prepare('DELETE FROM telegram_prompts WHERE chat_id=? AND message_id=?').bind(chatId, prompt.message_id).run();
   if (prompt.purpose === 'edit_copy') await env.JOBS.send({ type: 'draft_copy', jobId: prompt.job_id, instruction: message.text });
   if (prompt.purpose === 'edit_prompts') await env.JOBS.send({ type: 'revise_prompts', jobId: prompt.job_id, instruction: message.text });
-  await sendMessage(env, String(message.chat.id), `수정 요청을 반영합니다 · ${prompt.job_id}`);
+  await sendMessage(env, chatId, `수정 요청을 받았습니다 · ${prompt.job_id}\n“${clamp(message.text, 180)}”\n새 초안이 완성되면 다시 보내드릴게요.`);
   return true;
 }
 async function handleMessage(env: Env, message: TelegramMessage): Promise<void> {
@@ -666,11 +685,11 @@ async function handleMessage(env: Env, message: TelegramMessage): Promise<void> 
     return;
   }
   if (!(await requireAllowed(env, chatId))) return;
-  if (await handleReply(env, message)) return;
   const command = text.split(/\s+/)[0].toLowerCase();
   if (command === '/new' || command === '/새카드뉴스') return showReports(env, chatId);
   if (command === '/jobs' || command === '/작업') return showJobs(env, chatId);
-  await sendMessage(env, chatId, '사용법\n/new — 게시된 HTML 리포트 선택\n/jobs — 최근 작업 확인\n\n수정은 봇의 안내 메시지에 답장하세요.');
+  if (await handleReply(env, message)) return;
+  await sendMessage(env, chatId, '사용법\n/new — 게시된 HTML 리포트 선택\n/jobs — 최근 작업 확인\n\n수정 요청 버튼을 누른 뒤, 열린 입력창이나 다음 메시지에 수정 내용을 보내세요.');
 }
 async function handleCallback(env: Env, query: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
   const chatId = String(query.message?.chat.id ?? query.from.id);
@@ -689,7 +708,7 @@ async function handleCallback(env: Env, query: NonNullable<TelegramUpdate['callb
   const job = await getJob(env, id);
   if (!job || job.chat_id !== chatId) { await sendMessage(env, chatId, '작업을 찾지 못했습니다.'); return; }
   if (action === 'ca') { await updateJob(env, id, { status: 'COPY_APPROVED' }); await sendPromptReview(env, job); return; }
-  if (action === 'ce') { await registerReply(env, chatId, id, 'edit_copy', `문구 수정사항을 이 메시지에 답장하세요.\n예: 3페이지를 삭제하고 전체 문장을 15% 줄여줘.\n작업: ${id}`); return; }
+  if (action === 'ce') { await registerReply(env, chatId, id, 'edit_copy', `아래 입력창에 수정 내용을 한 번에 적어 보내주세요. 이 메시지에 답장해도 되고, 그냥 다음 메시지로 보내도 됩니다.\n\n페이지별 요청과 전체 요청을 함께 쓸 수 있어요.\n예: 표지는 한 문장으로 줄이고, 본문 1은 표지와 겹치지 않게 배경 설명으로 바꿔줘. 전체 본문은 페이지당 2~3문장으로 줄여줘.\n\n작업: ${id}`); return; }
   if (action === 'cr') { await env.JOBS.send({ type: 'draft_copy', jobId: id, instruction: '기존 초안과 다른 구조로 전체를 다시 작성하라.' }); await sendMessage(env, chatId, '문구를 다시 생성합니다.'); return; }
   if (action === 'pe') { await registerReply(env, chatId, id, 'edit_prompts', `이미지 계획 수정사항을 이 메시지에 답장하세요.\n예: 실사 위주로 바꾸고 4페이지는 건물 없이 자연스러운 일러스트로 표현해줘.\n작업: ${id}`); return; }
   if (action === 'pa') {
