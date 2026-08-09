@@ -40,6 +40,12 @@ class EditorialRulesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "문장 수"):
             validate_manifest(manifest, self.rules)
 
+    def test_rejects_repeated_sentence_across_pages(self) -> None:
+        manifest = valid_manifest()
+        manifest["pages"][2]["body"] = "낮은 조달 비용은 자산을 직접 보유할 유인을 낮추고 외부 공간을 활용하기 쉽게 만들었다. 핵심 입지의 공급 부족은 운영 중단 위험을 키우는 새로운 변수로 작용한다."
+        with self.assertRaisesRegex(ValueError, "앞 페이지 문장"):
+            validate_manifest(manifest, self.rules)
+
 
 if __name__ == "__main__":
     unittest.main()

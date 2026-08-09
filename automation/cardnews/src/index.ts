@@ -379,6 +379,9 @@ function assertDifferent(left: string, right: string, fields: string): void {
 function sentenceCount(value: string): number {
   return value.trim().match(/[.!?](?=(?:["'”’)\]]*\s)|$)/g)?.length ?? 0;
 }
+function sentences(value: string): string[] {
+  return value.split(/(?<=[.!?])(?:["'”’)\]]*)\s+/).map(comparable).filter((part) => part.length >= 20);
+}
 function normalizeDraft(raw: AiDraft): AiDraft {
   const { limits, structure } = editorialRules;
   if (!raw?.cover || !Array.isArray(raw.body_pages) || raw.body_pages.length < structure.body_pages_min || raw.body_pages.length > structure.body_pages_max) throw new Error('AI 카드 구조가 유효하지 않습니다.');
@@ -399,12 +402,18 @@ function normalizeDraft(raw: AiDraft): AiDraft {
   if (!cover.title || !cover.subtitle || !cover.visual_brief_ko || bodyPages.some((p) => !p.title || !p.body || !p.visual_brief_ko)) throw new Error('AI가 빈 카드 필드를 반환했습니다.');
   if (cover.subtitle.length < limits.cover_subtitle_min_chars) throw new Error('표지 부제가 너무 짧습니다. 다시 생성합니다.');
   assertDifferent(cover.title, cover.subtitle, '표지 제목과 부제');
+  const seenSentences = new Set<string>();
   for (const [index, page] of bodyPages.entries()) {
     if (page.title.length < limits.body_title_min_chars || page.body.length < limits.body_min_chars) throw new Error(`본문 ${index + 1}의 정보량이 카드 규격에 맞지 않습니다. 다시 생성합니다.`);
-    const sentences = sentenceCount(page.body);
-    if (sentences < limits.body_sentences_min || sentences > limits.body_sentences_max) throw new Error(`본문 ${index + 1}의 문장 수(${sentences})가 ${limits.body_sentences_min}~${limits.body_sentences_max}문장 기준에 맞지 않습니다. 다시 생성합니다.`);
+    const sentenceTotal = sentenceCount(page.body);
+    if (sentenceTotal < limits.body_sentences_min || sentenceTotal > limits.body_sentences_max) throw new Error(`본문 ${index + 1}의 문장 수(${sentenceTotal})가 ${limits.body_sentences_min}~${limits.body_sentences_max}문장 기준에 맞지 않습니다. 다시 생성합니다.`);
     assertDifferent(page.title, page.body, `본문 ${index + 1}의 제목과 내용`);
     assertDifferent(cover.title, page.title, `표지와 본문 ${index + 1} 제목`);
+    if (comparable(page.body).startsWith(comparable(page.title))) throw new Error(`본문 ${index + 1}이 제목을 첫 문장에서 반복했습니다. 다시 생성합니다.`);
+    for (const sentence of sentences(page.body)) {
+      if (seenSentences.has(sentence)) throw new Error(`본문 ${index + 1}이 앞 페이지 문장을 반복했습니다. 다시 생성합니다.`);
+      seenSentences.add(sentence);
+    }
   }
   if (new Set(bodyPages.map((page) => comparable(page.title))).size !== bodyPages.length) throw new Error('본문 제목이 서로 중복됐습니다. 다시 생성합니다.');
   return {
@@ -418,7 +427,7 @@ function normalizeDraft(raw: AiDraft): AiDraft {
 async function createDraft(env: Env, source: unknown, previous: PageRow[], instruction?: string): Promise<AiDraft> {
   const system = `당신은 SRC Plus의 한국어 인스타그램 카드뉴스 편집자다.
 다음 중앙 편집 규칙 JSON을 최초 생성, 수정, 전체 재생성에 예외 없이 적용한다.
-examples.good은 형식과 톤만 참고하고 그 주제·사실·수치·표현을 복사하지 않는다. examples.bad의 패턴은 만들지 않는다.
+examples.patterns의 중괄호를 원문 내용으로 바꿔 구조와 톤만 참고한다. 패턴 문구나 중괄호를 출력하지 않고 examples.bad의 패턴은 만들지 않는다.
 ${JSON.stringify(editorialRules, null, 2)}
 visual_brief_ko는 사용자가 검토할 한국어 이미지 설명이다.
 visual_prompt는 이미지 모델용 영어만 사용한다. 특정 기업명·브랜드명·로고·간판·제품명을 넣지 말고, 기업 사례는 일반적인 산업·공간 장면으로 바꾼다.
