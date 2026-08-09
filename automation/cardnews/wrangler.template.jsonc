@@ -38,7 +38,7 @@
     "GITHUB_REPO": "SRC_Plus",
     "GITHUB_BRANCH": "main",
     "ALLOWED_CHAT_ID": "",
-    "TEXT_MODEL": "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+    "TEXT_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
     "IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-4b",
     "VISION_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct",
     "VISION_QA_MODE": "advisory",
