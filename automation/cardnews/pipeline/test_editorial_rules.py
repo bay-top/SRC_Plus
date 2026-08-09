@@ -52,6 +52,12 @@ class EditorialRulesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "홍보"):
             validate_manifest(manifest, self.rules)
 
+    def test_rejects_cover_phrase_repeated_in_body(self) -> None:
+        manifest = valid_manifest()
+        manifest["pages"][1]["body"] = "비용을 넘어 운영 안정성을 함께 판단해야 한다. 이를 위해 기업은 공간이 사업 운영에 미치는 영향을 구체적으로 확인해야 한다."
+        with self.assertRaisesRegex(ValueError, "표지 문구"):
+            validate_manifest(manifest, self.rules)
+
 
 if __name__ == "__main__":
     unittest.main()

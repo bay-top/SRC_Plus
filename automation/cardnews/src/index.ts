@@ -420,6 +420,27 @@ function sentenceCount(value: string): number {
 function sentences(value: string): string[] {
   return value.split(/(?<=[.!?])(?:["'”’)\]]*)\s+/).map(comparable).filter((part) => part.length >= 20);
 }
+function isPromotional(value: string): boolean {
+  return /src[_ ]?plus|무료로|더 자세한 이야기|페이지에서/i.test(value);
+}
+function overlaps(left: string, right: string): boolean {
+  return left.includes(right) || right.includes(left);
+}
+function sanitizeDraft(raw: AiDraft): AiDraft {
+  const coverPhrases = [comparable(raw.cover.title), comparable(raw.cover.subtitle)].filter((value) => value.length >= 15);
+  const seenSentences: string[] = [];
+  const bodyPages = raw.body_pages.filter((page) => {
+    if (isPromotional(page.body)) return false;
+    const pageSentences = sentences(page.body);
+    if (pageSentences.some((sentence) => coverPhrases.some((cover) => overlaps(sentence, cover)))) return false;
+    if (pageSentences.some((sentence) => seenSentences.some((seen) => overlaps(sentence, seen)))) return false;
+    seenSentences.push(...pageSentences);
+    return true;
+  });
+  const safeBodyPages = bodyPages.length >= editorialRules.structure.body_pages_min ? bodyPages : raw.body_pages;
+  const ctaSubject = /src[_ ]?plus|무료|만나보|리포트/i.test(raw.cta_subject) ? raw.cover.title : raw.cta_subject;
+  return { ...raw, body_pages: safeBodyPages, cta_subject: ctaSubject };
+}
 function normalizeDraft(raw: AiDraft): AiDraft {
   const { limits, structure } = editorialRules;
   if (!raw?.cover || !Array.isArray(raw.body_pages) || raw.body_pages.length < structure.body_pages_min || raw.body_pages.length > structure.body_pages_max) throw new Error('AI 카드 구조가 유효하지 않습니다.');
@@ -447,9 +468,10 @@ function normalizeDraft(raw: AiDraft): AiDraft {
     if (sentenceTotal < limits.body_sentences_min || sentenceTotal > limits.body_sentences_max) throw new Error(`본문 ${index + 1}의 문장 수(${sentenceTotal})가 ${limits.body_sentences_min}~${limits.body_sentences_max}문장 기준에 맞지 않습니다. 다시 생성합니다.`);
     assertDifferent(page.title, page.body, `본문 ${index + 1}의 제목과 내용`);
     assertDifferent(cover.title, page.title, `표지와 본문 ${index + 1} 제목`);
-    if (/src[_ ]?plus|무료로|더 자세한 이야기|페이지에서/i.test(page.body)) throw new Error(`본문 ${index + 1}에 홍보·CTA 문구가 포함됐습니다. 다시 생성합니다.`);
+    if (isPromotional(page.body)) throw new Error(`본문 ${index + 1}에 홍보·CTA 문구가 포함됐습니다. 다시 생성합니다.`);
+    if (sentences(page.body).some((sentence) => [comparable(cover.title), comparable(cover.subtitle)].some((coverText) => coverText.length >= 15 && overlaps(sentence, coverText)))) throw new Error(`본문 ${index + 1}이 표지 문구를 반복했습니다. 다시 생성합니다.`);
     for (const sentence of sentences(page.body)) {
-      if (seenSentences.some((seen) => seen.includes(sentence) || sentence.includes(seen))) throw new Error(`본문 ${index + 1}이 앞 페이지 문장을 반복했습니다. 다시 생성합니다.`);
+      if (seenSentences.some((seen) => overlaps(sentence, seen))) throw new Error(`본문 ${index + 1}이 앞 페이지 문장을 반복했습니다. 다시 생성합니다.`);
       seenSentences.push(sentence);
     }
   }
@@ -511,7 +533,7 @@ visual_prompt는 이미지 모델용 영어만 사용한다. 특정 기업명·�
     response_format: { type: 'json_schema', json_schema: draftSchema() },
   }) as { response?: AiDraft };
   if (!result.response) throw new Error('Workers AI가 구조화 응답을 반환하지 않았습니다.');
-  let candidate = result.response;
+  let candidate = sanitizeDraft(result.response);
   let lastError = 'Workers AI가 유효한 카드뉴스를 반환하지 않았습니다.';
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
@@ -519,7 +541,7 @@ visual_prompt는 이미지 모델용 영어만 사용한다. 특정 기업명·�
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
       if (lastError.includes('이미지')) throw error;
-      candidate = await repairDraftCopy(env, source, candidate, lastError);
+      candidate = sanitizeDraft(await repairDraftCopy(env, source, candidate, lastError));
     }
   }
   throw new Error(`AI 초안 자동 교정 실패: ${lastError}`);
