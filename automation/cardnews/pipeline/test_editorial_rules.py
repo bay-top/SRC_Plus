@@ -46,6 +46,12 @@ class EditorialRulesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "앞 페이지 문장"):
             validate_manifest(manifest, self.rules)
 
+    def test_rejects_promotional_copy_in_body(self) -> None:
+        manifest = valid_manifest()
+        manifest["pages"][3]["body"] = "더 자세한 이야기와 다양한 주제의 리포트는 SRC Plus 페이지에서 확인할 수 있다. 모든 콘텐츠는 페이지에서 무료로 만나볼 수 있다."
+        with self.assertRaisesRegex(ValueError, "홍보"):
+            validate_manifest(manifest, self.rules)
+
 
 if __name__ == "__main__":
     unittest.main()

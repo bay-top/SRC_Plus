@@ -440,25 +440,28 @@ function normalizeDraft(raw: AiDraft): AiDraft {
   if (!cover.title || !cover.subtitle || !cover.visual_brief_ko || bodyPages.some((p) => !p.title || !p.body || !p.visual_brief_ko)) throw new Error('AI가 빈 카드 필드를 반환했습니다.');
   if (cover.subtitle.length < limits.cover_subtitle_min_chars) throw new Error('표지 부제가 너무 짧습니다. 다시 생성합니다.');
   assertDifferent(cover.title, cover.subtitle, '표지 제목과 부제');
-  const seenSentences = new Set<string>();
+  const seenSentences: string[] = [];
   for (const [index, page] of bodyPages.entries()) {
     if (page.title.length < limits.body_title_min_chars || page.body.length < limits.body_min_chars) throw new Error(`본문 ${index + 1}의 정보량이 카드 규격에 맞지 않습니다. 다시 생성합니다.`);
     const sentenceTotal = sentenceCount(page.body);
     if (sentenceTotal < limits.body_sentences_min || sentenceTotal > limits.body_sentences_max) throw new Error(`본문 ${index + 1}의 문장 수(${sentenceTotal})가 ${limits.body_sentences_min}~${limits.body_sentences_max}문장 기준에 맞지 않습니다. 다시 생성합니다.`);
     assertDifferent(page.title, page.body, `본문 ${index + 1}의 제목과 내용`);
     assertDifferent(cover.title, page.title, `표지와 본문 ${index + 1} 제목`);
+    if (/src[_ ]?plus|무료로|더 자세한 이야기|페이지에서/i.test(page.body)) throw new Error(`본문 ${index + 1}에 홍보·CTA 문구가 포함됐습니다. 다시 생성합니다.`);
     for (const sentence of sentences(page.body)) {
-      if (seenSentences.has(sentence)) throw new Error(`본문 ${index + 1}이 앞 페이지 문장을 반복했습니다. 다시 생성합니다.`);
-      seenSentences.add(sentence);
+      if (seenSentences.some((seen) => seen.includes(sentence) || sentence.includes(seen))) throw new Error(`본문 ${index + 1}이 앞 페이지 문장을 반복했습니다. 다시 생성합니다.`);
+      seenSentences.push(sentence);
     }
   }
   if (new Set(bodyPages.map((page) => comparable(page.title))).size !== bodyPages.length) throw new Error('본문 제목이 서로 중복됐습니다. 다시 생성합니다.');
+  const ctaSubject = clamp(ensureKorean(String(raw.cta_subject ?? '').replace(/에 대한$/, ''), '안내 문구 주제'), limits.cta_subject_max_chars);
+  if (/src[_ ]?plus|무료|만나보|리포트/i.test(ctaSubject)) throw new Error('CTA 주제에 홍보 문구가 포함됐습니다. 다시 생성합니다.');
   return {
     report_title: clamp(String(raw.report_title ?? cover.title).trim(), 120),
     category: ['insights', 'issues', 'sectors'].includes(raw.category) ? raw.category : 'issues',
     cover,
     body_pages: bodyPages,
-    cta_subject: clamp(ensureKorean(String(raw.cta_subject ?? '').replace(/에 대한$/, ''), '안내 문구 주제'), limits.cta_subject_max_chars),
+    cta_subject: ctaSubject,
   };
 }
 function copyFields(raw: AiDraft): AiCopyDraft {
