@@ -6,6 +6,8 @@
 
 문구의 단일 기준은 `config/editorial.json`이다. Worker의 최초 생성·수정·전체 재생성, HTML 구조화 파서, PPT 렌더 직전 검증이 모두 이 파일을 읽는다. 글자 수나 문체를 바꿀 때는 다른 프롬프트를 직접 수정하지 않고 이 파일만 변경한다.
 
+문구 생성은 중앙 규칙의 구조화 출력과 교정 지시를 안정적으로 따르도록 Workers AI `@cf/meta/llama-3.3-70b-instruct-fp8-fast`를 사용한다. 이미지 생성과 비전 QA 모델은 별도로 유지한다.
+
 - 저장소 루트의 `reports_*.html`만 탐색
 - `_PREVIEW` 파일 제외
 - `report-meta.published === true` 파일만 표시
