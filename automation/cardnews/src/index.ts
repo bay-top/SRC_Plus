@@ -409,7 +409,6 @@ function normalizeDraft(raw: AiDraft): AiDraft {
     if (sentenceTotal < limits.body_sentences_min || sentenceTotal > limits.body_sentences_max) throw new Error(`본문 ${index + 1}의 문장 수(${sentenceTotal})가 ${limits.body_sentences_min}~${limits.body_sentences_max}문장 기준에 맞지 않습니다. 다시 생성합니다.`);
     assertDifferent(page.title, page.body, `본문 ${index + 1}의 제목과 내용`);
     assertDifferent(cover.title, page.title, `표지와 본문 ${index + 1} 제목`);
-    if (comparable(page.body).startsWith(comparable(page.title))) throw new Error(`본문 ${index + 1}이 제목을 첫 문장에서 반복했습니다. 다시 생성합니다.`);
     for (const sentence of sentences(page.body)) {
       if (seenSentences.has(sentence)) throw new Error(`본문 ${index + 1}이 앞 페이지 문장을 반복했습니다. 다시 생성합니다.`);
       seenSentences.add(sentence);
