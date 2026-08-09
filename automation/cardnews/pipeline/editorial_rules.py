@@ -69,8 +69,6 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
             errors.append(f"본문 {index} 제목이 다른 페이지와 중복됐습니다.")
         if normalized_title == comparable(body):
             errors.append(f"본문 {index} 제목과 내용이 중복됐습니다.")
-        if comparable(body).startswith(normalized_title):
-            errors.append(f"본문 {index}이 제목을 첫 문장에서 반복했습니다.")
         for sentence in sentences(body):
             if sentence in seen_sentences:
                 errors.append(f"본문 {index}이 앞 페이지 문장을 반복했습니다.")
