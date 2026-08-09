@@ -27,7 +27,11 @@ def main() -> None:
     signature = hmac.new(os.environ["CALLBACK_HMAC_SECRET"].encode(), body, hashlib.sha256).hexdigest()
     request = urllib.request.Request(
         os.environ["WORKER_CALLBACK_URL"], data=body, method="POST",
-        headers={"content-type": "application/json", "x-cardnews-signature": f"sha256={signature}"},
+        headers={
+            "content-type": "application/json",
+            "user-agent": "SRC-Plus-Cardnews/1.0",
+            "x-cardnews-signature": f"sha256={signature}",
+        },
     )
     with urllib.request.urlopen(request, timeout=30) as response:
         print(response.status, response.read().decode())
