@@ -9,6 +9,9 @@ on:
     # 목록이 실제 파일과 어긋나는 경우까지 매번 스캔해 재동기화하기 위함.
     # build.py는 저장소를 스캔만 하므로 매번 실행해도 비용이 낮다.
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
