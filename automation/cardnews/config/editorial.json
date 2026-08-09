@@ -17,7 +17,7 @@
     "body_title_max_chars": 36,
     "body_min_chars": 70,
     "body_max_chars": 220,
-    "body_sentences_min": 2,
+    "body_sentences_min": 1,
     "body_sentences_max": 3,
     "cta_subject_max_chars": 42
   },
