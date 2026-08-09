@@ -36,7 +36,7 @@ class EditorialRulesTest(unittest.TestCase):
 
     def test_rejects_body_outside_sentence_limit(self) -> None:
         manifest = valid_manifest()
-        manifest["pages"][1]["body"] = "한 문장만 있는 짧은 본문이므로 중앙 편집 기준에서 요구하는 카드뉴스 분량과 문장 수를 동시에 충족하지 못한다."
+        manifest["pages"][1]["body"] = "첫 번째 주장이다. 두 번째 주장이다. 세 번째 주장이다. 한 페이지에 네 번째 주장까지 넣으면 중앙 편집 기준의 최대 문장 수를 초과하므로 독자가 한눈에 읽기 어렵다."
         with self.assertRaisesRegex(ValueError, "문장 수"):
             validate_manifest(manifest, self.rules)
 

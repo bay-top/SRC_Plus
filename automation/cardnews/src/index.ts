@@ -402,7 +402,7 @@ function normalizeDraft(raw: AiDraft): AiDraft {
   for (const [index, page] of bodyPages.entries()) {
     if (page.title.length < limits.body_title_min_chars || page.body.length < limits.body_min_chars) throw new Error(`본문 ${index + 1}의 정보량이 카드 규격에 맞지 않습니다. 다시 생성합니다.`);
     const sentences = sentenceCount(page.body);
-    if (sentences < limits.body_sentences_min || sentences > limits.body_sentences_max) throw new Error(`본문 ${index + 1}의 문장 수가 카드 규격에 맞지 않습니다. 다시 생성합니다.`);
+    if (sentences < limits.body_sentences_min || sentences > limits.body_sentences_max) throw new Error(`본문 ${index + 1}의 문장 수(${sentences})가 ${limits.body_sentences_min}~${limits.body_sentences_max}문장 기준에 맞지 않습니다. 다시 생성합니다.`);
     assertDifferent(page.title, page.body, `본문 ${index + 1}의 제목과 내용`);
     assertDifferent(cover.title, page.title, `표지와 본문 ${index + 1} 제목`);
   }
