@@ -1,3 +1,5 @@
+import editorialRules from '../config/editorial.json';
+
 type JobStatus =
   | 'SELECTED' | 'PARSING' | 'SOURCE_PARSED' | 'COPY_DRAFTING' | 'COPY_DRAFTED'
   | 'COPY_APPROVED' | 'IMAGE_GENERATING' | 'IMAGES_GENERATED' | 'RENDERING'
@@ -335,7 +337,7 @@ function draftSchema(): Record<string, unknown> {
         required: ['title', 'subtitle', 'visual_style', 'visual_brief_ko', 'visual_prompt'],
       },
       body_pages: {
-        type: 'array', minItems: 3, maxItems: 5,
+        type: 'array', minItems: editorialRules.structure.body_pages_min, maxItems: editorialRules.structure.body_pages_max,
         items: {
           type: 'object',
           properties: { title: { type: 'string' }, body: { type: 'string' }, ...visualProperties },
@@ -365,27 +367,33 @@ function comparable(value: string): string {
 function assertDifferent(left: string, right: string, fields: string): void {
   if (comparable(left) === comparable(right)) throw new Error(`${fields}이(가) 서로 중복됐습니다. 다시 생성합니다.`);
 }
+function sentenceCount(value: string): number {
+  return value.trim().match(/[.!?](?=(?:["'”’)\]]*\s)|$)/g)?.length ?? 0;
+}
 function normalizeDraft(raw: AiDraft): AiDraft {
-  if (!raw?.cover || !Array.isArray(raw.body_pages) || raw.body_pages.length < 3 || raw.body_pages.length > 5) throw new Error('AI 카드 구조가 유효하지 않습니다.');
+  const { limits, structure } = editorialRules;
+  if (!raw?.cover || !Array.isArray(raw.body_pages) || raw.body_pages.length < structure.body_pages_min || raw.body_pages.length > structure.body_pages_max) throw new Error('AI 카드 구조가 유효하지 않습니다.');
   const cover = {
-    title: clamp(ensureKorean(String(raw.cover.title ?? ''), '표지 제목'), 36),
-    subtitle: clamp(ensureKorean(String(raw.cover.subtitle ?? ''), '표지 부제'), 55),
+    title: clamp(ensureKorean(String(raw.cover.title ?? ''), '표지 제목'), limits.cover_title_max_chars),
+    subtitle: clamp(ensureKorean(String(raw.cover.subtitle ?? ''), '표지 부제'), limits.cover_subtitle_max_chars),
     visual_style: raw.cover.visual_style === 'illustration' ? 'illustration' as const : 'photo' as const,
     visual_brief_ko: clamp(String(raw.cover.visual_brief_ko ?? '').trim(), 280),
     visual_prompt: validateVisualPrompt(String(raw.cover.visual_prompt ?? '')),
   };
   const bodyPages = raw.body_pages.map((page) => ({
-    title: clamp(ensureKorean(String(page.title ?? ''), '본문 제목'), 36),
-    body: clamp(ensureKorean(String(page.body ?? ''), '본문'), 220),
+    title: clamp(ensureKorean(String(page.title ?? ''), '본문 제목'), limits.body_title_max_chars),
+    body: clamp(ensureKorean(String(page.body ?? ''), '본문'), limits.body_max_chars),
     visual_style: page.visual_style === 'illustration' ? 'illustration' as const : 'photo' as const,
     visual_brief_ko: clamp(String(page.visual_brief_ko ?? '').trim(), 280),
     visual_prompt: validateVisualPrompt(String(page.visual_prompt ?? '')),
   }));
   if (!cover.title || !cover.subtitle || !cover.visual_brief_ko || bodyPages.some((p) => !p.title || !p.body || !p.visual_brief_ko)) throw new Error('AI가 빈 카드 필드를 반환했습니다.');
-  if (cover.subtitle.length < 12) throw new Error('표지 부제가 너무 짧습니다. 다시 생성합니다.');
+  if (cover.subtitle.length < limits.cover_subtitle_min_chars) throw new Error('표지 부제가 너무 짧습니다. 다시 생성합니다.');
   assertDifferent(cover.title, cover.subtitle, '표지 제목과 부제');
   for (const [index, page] of bodyPages.entries()) {
-    if (page.title.length < 6 || page.body.length < 70) throw new Error(`본문 ${index + 1}의 정보량이 카드 규격에 맞지 않습니다. 다시 생성합니다.`);
+    if (page.title.length < limits.body_title_min_chars || page.body.length < limits.body_min_chars) throw new Error(`본문 ${index + 1}의 정보량이 카드 규격에 맞지 않습니다. 다시 생성합니다.`);
+    const sentences = sentenceCount(page.body);
+    if (sentences < limits.body_sentences_min || sentences > limits.body_sentences_max) throw new Error(`본문 ${index + 1}의 문장 수가 카드 규격에 맞지 않습니다. 다시 생성합니다.`);
     assertDifferent(page.title, page.body, `본문 ${index + 1}의 제목과 내용`);
     assertDifferent(cover.title, page.title, `표지와 본문 ${index + 1} 제목`);
   }
@@ -395,18 +403,14 @@ function normalizeDraft(raw: AiDraft): AiDraft {
     category: ['insights', 'issues', 'sectors'].includes(raw.category) ? raw.category : 'issues',
     cover,
     body_pages: bodyPages,
-    cta_subject: clamp(ensureKorean(String(raw.cta_subject ?? '').replace(/에 대한$/, ''), '안내 문구 주제'), 90),
+    cta_subject: clamp(ensureKorean(String(raw.cta_subject ?? '').replace(/에 대한$/, ''), '안내 문구 주제'), limits.cta_subject_max_chars),
   };
 }
 async function createDraft(env: Env, source: unknown, previous: PageRow[], instruction?: string): Promise<AiDraft> {
   const system = `당신은 SRC Plus의 한국어 인스타그램 카드뉴스 편집자다.
-원문의 사실과 수치만 사용하고, 원문에 없는 해석이나 수치를 만들지 않는다.
-카드 구성은 표지 1장, 본문 3~5장, 고정 안내 페이지 1장이다. 원문 분량에 맞춰 본문 수를 정하고 페이지 수를 채우기 위해 같은 내용을 반복하지 않는다. 안내 페이지 문장은 시스템이 만들므로 cta_subject만 명사구로 작성한다.
-리포트 전체를 기계적으로 요약하지 말고 독자가 흥미롭게 읽을 핵심 구조·수치·의사결정 포인트를 고른다.
-표지 제목과 본문 제목·문장은 한국어를 기본으로 한다. AI, IRU, ROIC, MFC처럼 업계에서 통용되는 공식 약어나 원문에서 일반적으로 쓰는 영어 표현만 유지한다.
-문체는 '~이다', '~한다', '~있다'의 건조한 단문 서술체다. 본문은 페이지당 2~3문장, 70~220자로 모바일에서 한눈에 읽히게 쓴다. 제목은 36자 이내다.
-표지는 결론을 설명하는 본문이 아니라 관심을 끄는 제목과 한 줄 부제만 둔다. 표지 제목과 부제는 같은 문장을 반복하지 않는다.
-본문 1은 표지를 되풀이하지 않고 독자가 주제를 이해하는 데 필요한 배경이나 핵심 문제부터 시작한다. 이후 본문은 근거·변화·시사점·판단 기준처럼 서로 다른 역할을 맡으며, 제목과 내용 및 본문 제목끼리 같은 문구를 반복하지 않는다. 각 본문 페이지에는 하나의 주장만 둔다.
+다음 중앙 편집 규칙 JSON을 최초 생성, 수정, 전체 재생성에 예외 없이 적용한다.
+examples.good은 형식과 톤만 참고하고 그 주제·사실·수치·표현을 복사하지 않는다. examples.bad의 패턴은 만들지 않는다.
+${JSON.stringify(editorialRules, null, 2)}
 visual_brief_ko는 사용자가 검토할 한국어 이미지 설명이다.
 visual_prompt는 이미지 모델용 영어만 사용한다. 특정 기업명·브랜드명·로고·간판·제품명을 넣지 말고, 기업 사례는 일반적인 산업·공간 장면으로 바꾼다.
 실제 장면이 자연스러우면 photo를 우선하고, 개념 관계를 사진으로 표현하기 어려울 때만 illustration을 사용한다.

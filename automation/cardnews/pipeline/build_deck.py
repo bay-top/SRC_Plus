@@ -10,6 +10,7 @@ from pptx import Presentation
 from pptx.dml.color import RGBColor
 from pptx.enum.text import MSO_ANCHOR, PP_ALIGN
 from pptx.util import Inches, Pt
+from editorial_rules import load_editorial_rules, validate_manifest
 
 WHITE = RGBColor(255, 255, 255)
 
@@ -136,9 +137,10 @@ def add_cta_text(slide, page: dict, design: dict, font: str) -> None:
         run.font.color.rgb = WHITE
 
 
-def build(manifest_path: Path, assets_dir: Path, design_path: Path, output: Path) -> None:
+def build(manifest_path: Path, assets_dir: Path, design_path: Path, editorial_path: Path, output: Path) -> None:
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     design = json.loads(design_path.read_text(encoding="utf-8"))
+    validate_manifest(manifest, load_editorial_rules(editorial_path))
     prs = Presentation()
     prs.slide_width = Inches(design["slide_width_in"])
     prs.slide_height = Inches(design["slide_height_in"])
@@ -197,9 +199,10 @@ def main() -> None:
     parser.add_argument("--manifest", required=True, type=Path)
     parser.add_argument("--assets", required=True, type=Path)
     parser.add_argument("--design", required=True, type=Path)
+    parser.add_argument("--editorial", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     args = parser.parse_args()
-    build(args.manifest, args.assets, args.design, args.output)
+    build(args.manifest, args.assets, args.design, args.editorial, args.output)
 
 
 if __name__ == "__main__":
