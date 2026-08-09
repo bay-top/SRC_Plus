@@ -418,7 +418,7 @@ function sentenceCount(value: string): number {
   return value.trim().match(/[.!?](?=(?:["'”’)\]]*\s)|$)/g)?.length ?? 0;
 }
 function sentences(value: string): string[] {
-  return value.split(/(?<=[.!?])(?:["'”’)\]]*)\s+/).map(comparable).filter((part) => part.length >= 20);
+  return value.split(/(?<=[.!?])(?:["'”’)\]]*)\s+/).map(comparable).filter((part) => part.length >= 15);
 }
 function isPromotional(value: string): boolean {
   return /src[_ ]?plus|무료로|더 자세한 이야기|페이지에서/i.test(value);
