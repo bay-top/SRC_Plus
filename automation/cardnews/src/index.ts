@@ -117,6 +117,13 @@ interface AiDraft {
   }>;
   cta_subject: string;
 }
+interface AiCopyDraft {
+  report_title: string;
+  category: 'insights' | 'issues' | 'sectors';
+  cover: { title: string; subtitle: string };
+  body_pages: Array<{ title: string; body: string }>;
+  cta_subject: string;
+}
 interface GitHubContentItem {
   name: string;
   path: string;
@@ -358,6 +365,37 @@ function draftSchema(): Record<string, unknown> {
     required: ['report_title', 'category', 'cover', 'body_pages', 'cta_subject'],
   };
 }
+function copyDraftSchema(bodyPageCount: number): Record<string, unknown> {
+  const { limits } = editorialRules;
+  return {
+    type: 'object',
+    properties: {
+      report_title: { type: 'string' },
+      category: { type: 'string', enum: ['insights', 'issues', 'sectors'] },
+      cover: {
+        type: 'object',
+        properties: {
+          title: { type: 'string', maxLength: limits.cover_title_max_chars },
+          subtitle: { type: 'string', minLength: limits.cover_subtitle_min_chars, maxLength: limits.cover_subtitle_max_chars },
+        },
+        required: ['title', 'subtitle'],
+      },
+      body_pages: {
+        type: 'array', minItems: bodyPageCount, maxItems: bodyPageCount,
+        items: {
+          type: 'object',
+          properties: {
+            title: { type: 'string', minLength: limits.body_title_min_chars, maxLength: limits.body_title_max_chars },
+            body: { type: 'string', minLength: limits.body_min_chars, maxLength: limits.body_max_chars },
+          },
+          required: ['title', 'body'],
+        },
+      },
+      cta_subject: { type: 'string', maxLength: limits.cta_subject_max_chars },
+    },
+    required: ['report_title', 'category', 'cover', 'body_pages', 'cta_subject'],
+  };
+}
 
 function ensureKorean(value: string, field: string): string {
   const text = value.trim();
@@ -423,6 +461,36 @@ function normalizeDraft(raw: AiDraft): AiDraft {
     cta_subject: clamp(ensureKorean(String(raw.cta_subject ?? '').replace(/에 대한$/, ''), '안내 문구 주제'), limits.cta_subject_max_chars),
   };
 }
+function copyFields(raw: AiDraft): AiCopyDraft {
+  return {
+    report_title: raw.report_title,
+    category: raw.category,
+    cover: { title: raw.cover.title, subtitle: raw.cover.subtitle },
+    body_pages: raw.body_pages.map((page) => ({ title: page.title, body: page.body })),
+    cta_subject: raw.cta_subject,
+  };
+}
+function mergeCopy(raw: AiDraft, copy: AiCopyDraft): AiDraft {
+  return {
+    ...raw,
+    ...copy,
+    cover: { ...raw.cover, ...copy.cover },
+    body_pages: copy.body_pages.map((page, index) => ({ ...raw.body_pages[index], ...page })),
+  };
+}
+async function repairDraftCopy(env: Env, source: unknown, raw: AiDraft, error: string): Promise<AiDraft> {
+  const result = await env.AI.run(env.TEXT_MODEL, {
+    messages: [
+      { role: 'system', content: `SRC Plus 카드뉴스 문구 교정자다. 이미지 계획은 다루지 않는다. 다음 중앙 편집 규칙을 반드시 적용한다.\n${JSON.stringify(editorialRules)}` },
+      { role: 'user', content: `검증 오류: ${error}\n\n교정할 문구: ${JSON.stringify(copyFields(raw))}\n\n원문 근거: ${clamp(JSON.stringify(source), 18000)}\n\n본문 페이지 수를 유지하고 오류와 모든 중복을 고쳐라.` },
+    ],
+    temperature: 0.1,
+    max_tokens: 2400,
+    response_format: { type: 'json_schema', json_schema: copyDraftSchema(raw.body_pages.length) },
+  }) as { response?: AiCopyDraft };
+  if (!result.response) throw new Error('문구 자동 교정 응답이 비어 있습니다.');
+  return mergeCopy(raw, result.response);
+}
 async function createDraft(env: Env, source: unknown, previous: PageRow[], instruction?: string): Promise<AiDraft> {
   const system = `당신은 SRC Plus의 한국어 인스타그램 카드뉴스 편집자다.
 다음 중앙 편집 규칙 JSON을 최초 생성, 수정, 전체 재생성에 예외 없이 적용한다.
@@ -433,26 +501,22 @@ visual_prompt는 이미지 모델용 영어만 사용한다. 특정 기업명·�
 실제 장면이 자연스러우면 photo를 우선하고, 개념 관계를 사진으로 표현하기 어려울 때만 illustration을 사용한다.
 이미지 안에 글자, 숫자, 로고, 워터마크, 간판이 없어야 하며 아래쪽은 카드 텍스트를 놓기 쉬운 단순한 구도로 둔다.`;
   const baseUser = `구조화된 리포트 JSON:\n${clamp(JSON.stringify(source), 42000)}\n\n현재 초안:\n${previous.length ? clamp(JSON.stringify(previous.map((p) => ({ page_no: p.page_no, page_kind: p.page_kind, title: p.title, body: p.body, visual_style: p.visual_style, visual_brief_ko: p.visual_brief_ko, visual_prompt: p.visual_prompt }))), 18000) : '없음'}\n\n수정 지시:\n${instruction ?? '새 카드뉴스 초안을 작성하라.'}`;
-  let correction = '';
+  const result = await env.AI.run(env.TEXT_MODEL, {
+    messages: [{ role: 'system', content: system }, { role: 'user', content: baseUser }],
+    temperature: 0.2,
+    max_tokens: 4000,
+    response_format: { type: 'json_schema', json_schema: draftSchema() },
+  }) as { response?: AiDraft };
+  if (!result.response) throw new Error('Workers AI가 구조화 응답을 반환하지 않았습니다.');
+  let candidate = result.response;
   let lastError = 'Workers AI가 유효한 카드뉴스를 반환하지 않았습니다.';
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const user = `${baseUser}${correction ? `\n\n직전 응답의 검증 실패:\n${correction}\n중앙 규칙을 다시 확인하고 모든 필드를 처음부터 교정하라.` : ''}`;
-    const result = await env.AI.run(env.TEXT_MODEL, {
-      messages: [{ role: 'system', content: system }, { role: 'user', content: user }],
-      temperature: attempt === 1 ? 0.2 : 0.1,
-      max_tokens: 4000,
-      response_format: { type: 'json_schema', json_schema: draftSchema() },
-    }) as { response?: AiDraft };
-    if (!result.response) {
-      correction = '구조화 응답이 비어 있습니다.';
-      lastError = correction;
-      continue;
-    }
     try {
-      return normalizeDraft(result.response);
+      return normalizeDraft(candidate);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      correction = lastError;
+      if (lastError.includes('이미지')) throw error;
+      candidate = await repairDraftCopy(env, source, candidate, lastError);
     }
   }
   throw new Error(`AI 초안 자동 교정 실패: ${lastError}`);
