@@ -18,6 +18,10 @@ def sentence_count(value: str) -> int:
     return len(re.findall(r"[.!?](?=(?:[\"'”’\)\]]*\s)|$)", value.strip()))
 
 
+def sentences(value: str) -> list[str]:
+    return [comparable(part) for part in re.split(r"(?<=[.!?])(?:[\"'”’\)\]]*)\s+", value.strip()) if len(comparable(part)) >= 20]
+
+
 def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
     pages = manifest.get("pages")
     if not isinstance(pages, list):
@@ -48,6 +52,7 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
             errors.append("표지 제목과 부제가 중복됐습니다.")
 
     seen_titles: set[str] = set()
+    seen_sentences: set[str] = set()
     cover_title = comparable(str(covers[0].get("title", ""))) if covers else ""
     for index, page in enumerate(bodies, start=1):
         title = str(page.get("title", "")).strip()
@@ -64,6 +69,12 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
             errors.append(f"본문 {index} 제목이 다른 페이지와 중복됐습니다.")
         if normalized_title == comparable(body):
             errors.append(f"본문 {index} 제목과 내용이 중복됐습니다.")
+        if comparable(body).startswith(normalized_title):
+            errors.append(f"본문 {index}이 제목을 첫 문장에서 반복했습니다.")
+        for sentence in sentences(body):
+            if sentence in seen_sentences:
+                errors.append(f"본문 {index}이 앞 페이지 문장을 반복했습니다.")
+            seen_sentences.add(sentence)
         seen_titles.add(normalized_title)
 
     if ctas and len(str(ctas[0].get("title", "")).strip()) > limits["cta_subject_max_chars"]:
