@@ -324,8 +324,8 @@ function draftSchema(): Record<string, unknown> {
   const { limits } = editorialRules;
   const visualProperties = {
     visual_style: { type: 'string', enum: ['photo', 'illustration'] },
-    visual_brief_ko: { type: 'string' },
-    visual_prompt: { type: 'string' },
+    visual_brief_ko: { type: 'string', minLength: 10 },
+    visual_prompt: { type: 'string', minLength: 20 },
   };
   return {
     type: 'object',
@@ -453,7 +453,7 @@ visual_prompt는 이미지 모델용 영어만 사용한다. 특정 기업명·�
       return normalizeDraft(result.response);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      correction = `${lastError}\n직전 응답: ${clamp(JSON.stringify(result.response), 12000)}`;
+      correction = lastError;
     }
   }
   throw new Error(`AI 초안 자동 교정 실패: ${lastError}`);
