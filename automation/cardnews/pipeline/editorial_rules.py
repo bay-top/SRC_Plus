@@ -19,7 +19,7 @@ def sentence_count(value: str) -> int:
 
 
 def sentences(value: str) -> list[str]:
-    return [comparable(part) for part in re.split(r"(?<=[.!?])(?:[\"'”’\)\]]*)\s+", value.strip()) if len(comparable(part)) >= 20]
+    return [comparable(part) for part in re.split(r"(?<=[.!?])(?:[\"'”’\)\]]*)\s+", value.strip()) if len(comparable(part)) >= 15]
 
 
 def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
