@@ -30,6 +30,23 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: automation/cardnews
           command: d1 migrations apply cardnews-db --remote --config wrangler.generated.jsonc
+      - name: Upload Worker secrets
+        run: >-
+          node -e "process.stdout.write(JSON.stringify({
+          TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN,
+          TELEGRAM_WEBHOOK_SECRET: process.env.TELEGRAM_WEBHOOK_SECRET,
+          GITHUB_TOKEN: process.env.GITHUB_TOKEN,
+          CALLBACK_HMAC_SECRET: process.env.CALLBACK_HMAC_SECRET,
+          SETUP_TOKEN: process.env.SETUP_TOKEN
+          }))" | npx wrangler secret bulk --config wrangler.generated.jsonc
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
+          GITHUB_TOKEN: ${{ secrets.CARDNEWS_GITHUB_PAT }}
+          CALLBACK_HMAC_SECRET: ${{ secrets.CARDNEWS_CALLBACK_HMAC_SECRET }}
+          SETUP_TOKEN: ${{ secrets.CARDNEWS_SETUP_TOKEN }}
       - name: Deploy Worker and secrets
         uses: cloudflare/wrangler-action@v3
         with:
@@ -37,18 +54,6 @@ jobs:
           accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           workingDirectory: automation/cardnews
           command: deploy --config wrangler.generated.jsonc
-          secrets: |
-            TELEGRAM_BOT_TOKEN
-            TELEGRAM_WEBHOOK_SECRET
-            GITHUB_TOKEN
-            CALLBACK_HMAC_SECRET
-            SETUP_TOKEN
-        env:
-          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
-          TELEGRAM_WEBHOOK_SECRET: ${{ secrets.TELEGRAM_WEBHOOK_SECRET }}
-          GITHUB_TOKEN: ${{ secrets.CARDNEWS_GITHUB_PAT }}
-          CALLBACK_HMAC_SECRET: ${{ secrets.CARDNEWS_CALLBACK_HMAC_SECRET }}
-          SETUP_TOKEN: ${{ secrets.CARDNEWS_SETUP_TOKEN }}
       - name: Register Telegram webhook
         run: scripts/set_webhook.sh
         env:
