@@ -24,6 +24,7 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         source = (ROOT / "src" / "index.ts").read_text(encoding="utf-8")
         config = json.loads((ROOT / "wrangler.template.jsonc").read_text(encoding="utf-8"))
         variables = config["vars"]
+        self.assertEqual(variables["FREE_ONLY_MODE"], "true")
         self.assertEqual(variables["TEXT_PROVIDER"], "horde")
         self.assertEqual(variables["IMAGE_PROVIDER"], "pollinations")
         self.assertEqual(variables["IMAGE_FALLBACK_PROVIDER"], "horde")
@@ -31,6 +32,7 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         self.assertIn("/v2/generate/text/async", source)
         self.assertIn("/v2/generate/async", source)
         self.assertIn("image.pollinations.ai", source)
+        self.assertIn("FREE_ONLY_MODE에서는", source)
         self.assertIn("/chat/completions", source)  # paid provider remains an explicit opt-in
         self.assertIn("runVisionModel", source)
         self.assertIn("OPENAI_API_KEY", source)

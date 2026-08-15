@@ -23,6 +23,7 @@ interface Env {
   GITHUB_REPO: string;
   GITHUB_BRANCH: string;
   ALLOWED_CHAT_ID: string;
+  FREE_ONLY_MODE?: string;
   TEXT_MODEL: string;
   TEXT_FALLBACK_MODEL?: string;
   TEXT_PROVIDER?: string;
@@ -205,9 +206,12 @@ function userFacingAiError(message: string): string {
   }
   return `외부 AI provider의 사용량 또는 요청 한도에 도달했습니다. 작업은 보존되어 있으며, provider 한도가 회복된 뒤 /retry로 다시 실행할 수 있습니다. 원문과 승인된 문안은 유지됩니다.`;
 }
+function freeOnlyMode(env: Env): boolean { return (env.FREE_ONLY_MODE?.trim().toLowerCase() || 'true') !== 'false'; }
 function aiProvider(env: Env, kind: 'text' | 'image' | 'vision'): 'cloudflare' | 'openai' | 'horde' | 'pollinations' | 'openverse' | 'off' {
   const configured = (kind === 'text' ? env.TEXT_PROVIDER : kind === 'image' ? env.IMAGE_PROVIDER : env.VISION_PROVIDER)?.trim().toLowerCase();
+  if (freeOnlyMode(env) && (configured === 'openai' || configured === 'cloudflare')) throw new Error(`FREE_ONLY_MODE에서는 ${configured} provider를 호출할 수 없습니다.`);
   if (configured === 'cloudflare' || configured === 'openai' || configured === 'horde' || configured === 'pollinations' || configured === 'openverse' || configured === 'off') return configured;
+  if (freeOnlyMode(env)) return kind === 'vision' ? 'off' : 'horde';
   return env.OPENAI_API_KEY?.trim() ? 'openai' : 'cloudflare';
 }
 function openAiBaseUrl(env: Env): string { return (env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1').replace(/\/$/, ''); }
@@ -282,12 +286,13 @@ async function runPollinationsImage(env: Env, input: Record<string, unknown>): P
   const width = Math.min(Math.max(Math.floor(Number(input.width ?? 512) / 64) * 64, 256), 512);
   const height = Math.min(Math.max(Math.floor(Number(input.height ?? 704) / 64) * 64, 256), 704);
   const model = encodeURIComponent(env.POLLINATIONS_IMAGE_MODEL?.trim() || 'flux');
-  const endpoint = env.POLLINATIONS_API_KEY?.trim()
+  const apiKey = freeOnlyMode(env) ? '' : env.POLLINATIONS_API_KEY?.trim() || '';
+  const endpoint = apiKey
     ? `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}`
     : `${pollinationsBaseUrl(env)}/prompt/${encodeURIComponent(prompt)}`;
   const url = `${endpoint}?model=${model}&width=${width}&height=${height}&nologo=true&enhance=false&safe=true`;
   const headers: Record<string, string> = { accept: 'image/jpeg,image/png,image/webp', 'user-agent': 'SRCPlus-free-pipeline/1.0' };
-  if (env.POLLINATIONS_API_KEY?.trim()) headers.authorization = `Bearer ${env.POLLINATIONS_API_KEY.trim()}`;
+  if (apiKey) headers.authorization = `Bearer ${apiKey}`;
   const response = await fetch(url, { headers });
   if (!response.ok) throw new Error(`Pollinations image ${response.status}`);
   return { image: bytesToBase64(new Uint8Array(await response.arrayBuffer())), contentType: response.headers.get('content-type') ?? 'image/jpeg' };

@@ -38,6 +38,7 @@
     "GITHUB_REPO": "SRC_Plus",
     "GITHUB_BRANCH": "main",
     "ALLOWED_CHAT_ID": "",
+    "FREE_ONLY_MODE": "true",
     "TEXT_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
     "TEXT_FALLBACK_MODEL": "@cf/meta/llama-3.2-3b-instruct",
     "TEXT_PROVIDER": "horde",
