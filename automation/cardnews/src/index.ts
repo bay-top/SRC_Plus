@@ -25,9 +25,17 @@ interface Env {
   ALLOWED_CHAT_ID: string;
   TEXT_MODEL: string;
   TEXT_FALLBACK_MODEL?: string;
+  TEXT_PROVIDER?: string;
   IMAGE_MODEL: string;
   IMAGE_FALLBACK_MODEL?: string;
+  IMAGE_PROVIDER?: string;
   VISION_MODEL: string;
+  VISION_PROVIDER?: string;
+  OPENAI_API_KEY?: string;
+  OPENAI_BASE_URL?: string;
+  OPENAI_TEXT_MODEL?: string;
+  OPENAI_IMAGE_MODEL?: string;
+  OPENAI_VISION_MODEL?: string;
   VISION_QA_MODE: string;
   IMAGE_WIDTH: string;
   IMAGE_HEIGHT: string;
@@ -169,7 +177,7 @@ const IMAGE_POLICY_ILLUSTRATION = [
 
 function now(): string { return new Date().toISOString(); }
 function isAiQuotaError(message: string): boolean {
-  return /daily free allocation|free allocation of 10,000 neurons|무료 할당량|4006|3036/i.test(message);
+  return /daily free allocation|free allocation of 10,000 neurons|무료 할당량|4006|3036|insufficient_quota|billing_hard_limit|rate limit|429/i.test(message);
 }
 function nextAiQuotaResetLabel(): string {
   const current = new Date();
@@ -180,9 +188,51 @@ function nextAiQuotaResetLabel(): string {
 }
 function userFacingAiError(message: string): string {
   if (!isAiQuotaError(message)) return message;
-  return `Cloudflare Workers AI 무료 할당량(하루 10,000 Neurons)을 모두 사용했다는 작업 당시의 기록입니다. 무료 사용량은 매일 00:00 UTC, 한국시간 오전 9시에 초기화됩니다. 다음 초기화 시각: ${nextAiQuotaResetLabel()} (한국시간). 현재 할당량을 다시 확인하려면 초기화 후 /retry를 실행하세요. 작업은 보존되어 있습니다.`;
+  if (/daily free allocation|free allocation of 10,000 neurons|무료 할당량|4006|3036/i.test(message)) {
+    return `Cloudflare Workers AI 무료 할당량(하루 10,000 Neurons)을 모두 사용했다는 작업 당시의 기록입니다. 무료 사용량은 매일 00:00 UTC, 한국시간 오전 9시에 초기화됩니다. 다음 초기화 시각: ${nextAiQuotaResetLabel()} (한국시간). 현재 할당량을 다시 확인하려면 초기화 후 /retry를 실행하세요. 작업은 보존되어 있습니다.`;
+  }
+  return `외부 AI provider의 사용량 또는 요청 한도에 도달했습니다. 작업은 보존되어 있으며, provider 한도가 회복된 뒤 /retry로 다시 실행할 수 있습니다. 원문과 승인된 문안은 유지됩니다.`;
+}
+function aiProvider(env: Env, kind: 'text' | 'image' | 'vision'): 'cloudflare' | 'openai' {
+  const configured = (kind === 'text' ? env.TEXT_PROVIDER : kind === 'image' ? env.IMAGE_PROVIDER : env.VISION_PROVIDER)?.trim().toLowerCase();
+  if (configured === 'cloudflare' || configured === 'openai') return configured;
+  return env.OPENAI_API_KEY?.trim() ? 'openai' : 'cloudflare';
+}
+function openAiBaseUrl(env: Env): string { return (env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1').replace(/\/$/, ''); }
+function parseJsonContent(value: unknown): Record<string, unknown> {
+  const text = typeof value === 'string' ? value.trim() : JSON.stringify(value ?? '');
+  const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
+  try { return JSON.parse(cleaned) as Record<string, unknown>; } catch { /* continue with the first JSON object */ }
+  const start = cleaned.indexOf('{');
+  const end = cleaned.lastIndexOf('}');
+  if (start >= 0 && end > start) return JSON.parse(cleaned.slice(start, end + 1)) as Record<string, unknown>;
+  throw new Error('OpenAI가 유효한 JSON 응답을 반환하지 않았습니다.');
+}
+async function runOpenAiChat(env: Env, input: Record<string, unknown>, model: string): Promise<{ response: Record<string, unknown> }> {
+  const apiKey = env.OPENAI_API_KEY?.trim();
+  if (!apiKey) throw new Error('OpenAI provider가 선택됐지만 OPENAI_API_KEY가 설정되지 않았습니다.');
+  const rawMessages = Array.isArray(input.messages) ? input.messages as Array<Record<string, unknown>> : [];
+  const image = typeof input.image === 'string' ? input.image : null;
+  const lastUser = rawMessages.map((message, index) => {
+    const content = typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '');
+    if (!image || index !== rawMessages.length - 1 || message.role !== 'user') return { role: message.role, content };
+    return { role: message.role, content: [{ type: 'text', text: content }, { type: 'image_url', image_url: { url: image } }] };
+  });
+  const responseFormat = input.response_format ? { type: 'json_object' } : undefined;
+  const responseSchema = input.response_format ? `\n반드시 JSON 객체만 반환한다. 참고할 출력 스키마: ${JSON.stringify(input.response_format)}` : '';
+  if (responseSchema && lastUser.length && lastUser[0].role === 'system') lastUser[0] = { ...lastUser[0], content: `${lastUser[0].content}${responseSchema}` };
+  const response = await fetch(`${openAiBaseUrl(env)}/chat/completions`, {
+    method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+    body: JSON.stringify({ model, messages: lastUser, temperature: input.temperature, max_tokens: input.max_tokens, response_format: responseFormat }),
+  });
+  const payload = await response.json() as { error?: { message?: string; code?: string }; choices?: Array<{ message?: { content?: unknown } }> };
+  if (!response.ok) throw new Error(`OpenAI ${response.status} ${payload.error?.code ?? ''} ${payload.error?.message ?? ''}`.trim());
+  const content = payload.choices?.[0]?.message?.content;
+  if (content === undefined) throw new Error('OpenAI가 응답 본문을 반환하지 않았습니다.');
+  return { response: parseJsonContent(content) };
 }
 async function runTextModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
+  if (aiProvider(env, 'text') === 'openai') return runOpenAiChat(env, input, env.OPENAI_TEXT_MODEL?.trim() || 'gpt-4o-mini');
   try {
     return await env.AI.run(env.TEXT_MODEL, input);
   } catch (error) {
@@ -193,14 +243,43 @@ async function runTextModel(env: Env, input: Record<string, unknown>): Promise<u
   }
 }
 async function runImageModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
+  if (aiProvider(env, 'image') === 'openai') {
+    const apiKey = env.OPENAI_API_KEY?.trim();
+    if (!apiKey) throw new Error('OpenAI provider가 선택됐지만 OPENAI_API_KEY가 설정되지 않았습니다.');
+    const width = Number(input.width ?? 960);
+    const height = Number(input.height ?? 1280);
+    const response = await fetch(`${openAiBaseUrl(env)}/images/generations`, {
+      method: 'POST', headers: { authorization: `Bearer ${apiKey}`, 'content-type': 'application/json' },
+      body: JSON.stringify({ model: env.OPENAI_IMAGE_MODEL?.trim() || 'gpt-image-1', prompt: input.prompt, size: width >= height ? '1536x1024' : '1024x1536', quality: 'medium', output_format: 'png' }),
+    });
+    const payload = await response.json() as { error?: { message?: string; code?: string }; data?: Array<{ b64_json?: string }> };
+    if (!response.ok) throw new Error(`OpenAI ${response.status} ${payload.error?.code ?? ''} ${payload.error?.message ?? ''}`.trim());
+    const image = payload.data?.[0]?.b64_json;
+    if (!image) throw new Error('OpenAI 이미지 모델이 이미지를 반환하지 않았습니다.');
+    return { image };
+  }
+  const runCloudflareImage = (model: string) => {
+    const form = new FormData();
+    form.append('prompt', String(input.prompt ?? ''));
+    form.append('width', String(input.width ?? env.IMAGE_WIDTH ?? '960'));
+    form.append('height', String(input.height ?? env.IMAGE_HEIGHT ?? '1280'));
+    form.append('guidance', '4');
+    form.append('seed', String(input.seed ?? 0));
+    const serialized = new Response(form);
+    return env.AI.run(model, { multipart: { body: serialized.body, contentType: serialized.headers.get('content-type') } });
+  };
   try {
-    return await env.AI.run(env.IMAGE_MODEL, input);
+    return await runCloudflareImage(env.IMAGE_MODEL);
   } catch (error) {
     const reason = error instanceof Error ? error.message : String(error);
     const fallback = env.IMAGE_FALLBACK_MODEL?.trim();
     if (!fallback || fallback === env.IMAGE_MODEL || isAiQuotaError(reason)) throw error;
-    return env.AI.run(fallback, input);
+    return runCloudflareImage(fallback);
   }
+}
+async function runVisionModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
+  if (aiProvider(env, 'vision') === 'openai') return runOpenAiChat(env, input, env.OPENAI_VISION_MODEL?.trim() || env.OPENAI_TEXT_MODEL?.trim() || 'gpt-4o-mini');
+  return env.AI.run(env.VISION_MODEL, input);
 }
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
@@ -791,14 +870,10 @@ async function revisePrompts(env: Env, source: unknown, pages: PageRow[], instru
 }
 async function generateImage(env: Env, page: PageRow, seed: number): Promise<Uint8Array> {
   const policy = page.visual_style === 'illustration' ? IMAGE_POLICY_ILLUSTRATION : IMAGE_POLICY_PHOTO;
-  const form = new FormData();
-  form.append('prompt', `${policy} Subject and scene: ${page.visual_prompt}`);
-  form.append('width', env.IMAGE_WIDTH || '960');
-  form.append('height', env.IMAGE_HEIGHT || '1280');
-  form.append('guidance', '4');
-  form.append('seed', String(seed));
-  const serialized = new Response(form);
-  const result = await runImageModel(env, { multipart: { body: serialized.body, contentType: serialized.headers.get('content-type') } }) as { image?: string };
+  const result = await runImageModel(env, {
+    prompt: `${policy} Subject and scene: ${page.visual_prompt}`,
+    width: env.IMAGE_WIDTH || '960', height: env.IMAGE_HEIGHT || '1280', seed,
+  }) as { image?: string };
   if (!result.image) throw new Error('이미지 모델이 이미지를 반환하지 않았습니다.');
   return base64ToBytes(result.image);
 }
@@ -818,7 +893,7 @@ async function assessImage(env: Env, page: PageRow, image: Uint8Array): Promise<
     semantic_fit_score: { type: 'integer', minimum: 1, maximum: 5 }, editorial_tone_score: { type: 'integer', minimum: 1, maximum: 5 }, realism_score: { type: 'integer', minimum: 1, maximum: 5 }, notes_ko: { type: 'string' },
   }, required: ['has_readable_text', 'has_logo_or_brand', 'has_watermark', 'obvious_ai_artifacts', 'composition_fit', 'people_face_focus', 'people_role_fit', 'space_type_fit', 'semantic_fit_score', 'editorial_tone_score', 'realism_score', 'notes_ko'] };
   try {
-    const result = await env.AI.run(env.VISION_MODEL, {
+    const result = await runVisionModel(env, {
       messages: [
         { role: 'system', content: 'SRC Plus 카드뉴스의 비주얼 디렉터다. 실제로 보이는 요소만 판단하고 한국어로 짧고 구체적으로 메모한다.' },
         { role: 'user', content: `페이지 제목: ${page.title}\n페이지 본문: ${page.body}\n의도한 이미지: ${page.visual_brief_ko}\n이 이미지가 페이지 주장과 직접 연결되는지, 프리미엄 경제지·Getty Images풍 에디토리얼 톤인지, 실제 사진 또는 사실적인 사진 기반 합성으로 그럴듯한지 각각 1~5점으로 평가하라. 장면의 시설 규모와 사람의 행동이 현업에서 실제로 있을 법한지도 현실감 점수에 반영한다. 읽을 수 있는 글자·숫자·간판뿐 아니라 화살표, X 표시, 신호 아이콘, 차선 기호처럼 의미를 가진 인공 그래픽도 발견하면 실패로 표시한다. 기업 로고·브랜드, 워터마크, 명백한 AI 왜곡과 3:4 카드 하단 30~40% 텍스트 안전 영역도 검사하라. 안전 영역이 빈 검은 바닥이나 판처럼 부자연스럽게 보이는지도 확인하라.` },

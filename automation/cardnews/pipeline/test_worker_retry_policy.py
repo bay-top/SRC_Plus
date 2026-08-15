@@ -20,6 +20,18 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         consumer = config["queues"]["consumers"][0]
         self.assertEqual(consumer["max_retries"], 10)
 
+    def test_external_provider_is_opt_in_but_covers_text_image_and_vision(self) -> None:
+        source = (ROOT / "src" / "index.ts").read_text(encoding="utf-8")
+        config = json.loads((ROOT / "wrangler.template.jsonc").read_text(encoding="utf-8"))
+        variables = config["vars"]
+        self.assertEqual(variables["TEXT_PROVIDER"], "auto")
+        self.assertEqual(variables["IMAGE_PROVIDER"], "auto")
+        self.assertEqual(variables["VISION_PROVIDER"], "auto")
+        self.assertIn("/chat/completions", source)
+        self.assertIn("/images/generations", source)
+        self.assertIn("runVisionModel", source)
+        self.assertIn("OPENAI_API_KEY", source)
+
 
 if __name__ == "__main__":
     unittest.main()

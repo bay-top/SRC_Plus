@@ -6,7 +6,7 @@
 
 문구의 단일 기준은 `config/editorial.json`이다. Worker의 최초 생성·수정·전체 재생성, HTML 구조화 파서, PPT 렌더 직전 검증이 모두 이 파일을 읽는다. 글자 수나 문체를 바꿀 때는 다른 프롬프트를 직접 수정하지 않고 이 파일만 변경한다.
 
-문구 생성은 중앙 규칙의 구조화 출력과 교정 지시를 지연 없이 따르도록 Workers AI `@cf/meta/llama-4-scout-17b-16e-instruct`를 사용한다. 모델 호출 자체가 일시적으로 실패하면 `@cf/meta/llama-3.2-3b-instruct`로 한 번 대체하지만, 무료 Neurons 한도 오류에는 대체 모델을 호출하지 않는다. 문안 생성과 이미지 계획 생성을 별도 Queue 단계로 분리하고, 한 번의 Queue 실행에서는 시간 초과를 막기 위해 최대 2회의 교정을 수행한 뒤 실패를 Queue에 돌려보낸다. Queue 전체는 중앙 규칙을 통과할 때까지 최대 10회 전달을 허용하고 그 뒤에만 사용자에게 실패로 알린다. 이미지 모델도 `flux-2-klein-4b` 실패 시 `flux-1-schnell`로 대체한다.
+문구·이미지·비전 QA는 provider adapter를 통해 실행한다. 기본값은 Cloudflare Workers AI이며, `OPENAI_API_KEY`가 Worker secret으로 등록되면 `TEXT_PROVIDER`, `IMAGE_PROVIDER`, `VISION_PROVIDER`의 `auto` 설정이 OpenAI 경로로 자동 전환된다. 따라서 Cloudflare의 계정 전체 일일 Neurons 한도가 문구와 이미지 전체를 막는 구조를 유지하지 않는다. OpenAI 경로는 구조화 문구에 `gpt-4o-mini`, 이미지에 `gpt-image-1`을 사용한다. 키가 없으면 기존 Cloudflare 경로로 안전하게 남는다. 문안 생성과 이미지 계획 생성을 별도 Queue 단계로 분리하고, 한 번의 Queue 실행에서는 시간 초과를 막기 위해 최대 2회의 교정을 수행한 뒤 실패를 Queue에 돌려보낸다. Queue 전체는 중앙 규칙을 통과할 때까지 최대 10회 전달을 허용하고 그 뒤에만 사용자에게 실패로 알린다.
 
 - 저장소 루트의 `reports_*.html`만 탐색
 - `_PREVIEW` 파일 제외
@@ -35,7 +35,7 @@ GitHub Actions: 구조화 파싱
         ↓ R2 + HMAC callback
 Cloudflare Worker
   ├─ D1 상태 머신
-  ├─ Workers AI 문구·이미지·선택적 비전 QA
+  ├─ AI provider adapter (Cloudflare 기본, OpenAI 선택)
   ├─ R2 중간·최종 파일
   └─ Telegram 승인 UI
         ↓ repository_dispatch
@@ -107,6 +107,7 @@ CARDNEWS_SETUP_TOKEN
 CARDNEWS_GITHUB_PAT
 CARDNEWS_CALLBACK_HMAC_SECRET
 CARDNEWS_WORKER_BASE_URL
+OPENAI_API_KEY (선택: 등록하면 auto provider가 OpenAI로 전환)
 R2_ACCOUNT_ID
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
@@ -120,6 +121,10 @@ R2_SECRET_ACCESS_KEY
 4. Telegram에서 `/claim ...` 후 `/new`로 테스트한다.
 
 배포 워크플로는 `.github/workflows/cardnews-cloudflare-deploy.yml`에 있다. 수동 실행만 허용하며 Node.js 22에서 Wrangler 설정 생성과 타입 검사를 마친 뒤 D1 migration, Worker 배포, Telegram webhook 등록, health check를 수행한다.
+
+### AI provider 전환
+
+현재 GitHub 저장소에는 Cloudflare secret만 등록되어 있어 기본 경로는 Cloudflare다. Cloudflare 무료 한도를 피하려면 결제가 설정된 OpenAI 프로젝트의 API 키를 GitHub Secret `OPENAI_API_KEY`로 추가한 뒤 배포 workflow를 한 번 실행한다. 세 provider 값은 `auto`이므로 별도 코드 수정 없이 키가 있는 배포부터 문구·이미지·비전 QA가 OpenAI로 전환된다. 키를 제거하면 다시 Cloudflare로 돌아간다. provider별 결제와 사용량은 해당 provider 콘솔에서 확인한다.
 
 ## GitHub Actions 파이프라인
 
