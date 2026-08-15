@@ -176,7 +176,7 @@ GitHub runner에는 Pretendard가 기본 설치되지 않으므로 현재 자동
 ```text
 SELECTED → PARSING → SOURCE_PARSED
 → COPY_DRAFTING → COPY_DRAFTED → COPY_APPROVED
-→ IMAGE_GENERATING → IMAGES_GENERATED
+→ PROMPT_DRAFTING → PROMPT_DRAFTED → IMAGE_GENERATING → IMAGES_GENERATED
 → RENDERING → RENDERED → FINAL_APPROVED
 ```
 
@@ -188,6 +188,6 @@ SELECTED → PARSING → SOURCE_PARSED
 - GitHub PAT 저장소 범위 제한
 - GitHub Actions callback HMAC-SHA256 검증
 - Telegram update와 callback idempotency
-- Queue 3회 재시도
+- Queue 전체 최대 10회 재시도(한 번의 실행은 최대 2회 교정)
 - `_PREVIEW` 및 비공개 리포트 제외
 - 최종 파일 부분 전송 재개

@@ -805,7 +805,7 @@ async function generateImage(env: Env, page: PageRow, seed: number): Promise<Uin
 async function generateAndStoreImage(env: Env, jobId: string, page: PageRow, variant: 'a' | 'b', nonce?: string): Promise<void> {
   const bytes = await generateImage(env, page, seedFor(jobId, page.page_no, variant, nonce));
   const qa = await assessImage(env, page, bytes);
-  const key = `jobs/${jobId}/images/page-${String(page.page_no).padStart(2, '0')}-${variant}-${nonce ?? 'self-test'}.png`;
+  const key = `jobs/${jobId}/images/page-${String(page.page_no).padStart(2, '0')}-${variant}-${nonce ?? 'initial'}.png`;
   await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
   const column = variant === 'a' ? 'image_a_key' : 'image_b_key';
   const qaColumn = variant === 'a' ? 'qa_a_json' : 'qa_b_json';
