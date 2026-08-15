@@ -6,7 +6,7 @@
 
 문구의 단일 기준은 `config/editorial.json`이다. Worker의 최초 생성·수정·전체 재생성, HTML 구조화 파서, PPT 렌더 직전 검증이 모두 이 파일을 읽는다. 글자 수나 문체를 바꿀 때는 다른 프롬프트를 직접 수정하지 않고 이 파일만 변경한다.
 
-문구 생성은 중앙 규칙의 구조화 출력과 교정 지시를 지연 없이 따르도록 Workers AI `@cf/meta/llama-4-scout-17b-16e-instruct`를 사용한다. 모델 호출 자체가 일시적으로 실패하면 `@cf/meta/llama-3.2-3b-instruct`로 한 번 대체하지만, 무료 Neurons 한도 오류에는 대체 모델을 호출하지 않는다. 문안 생성과 이미지 계획 생성을 별도 Queue 단계로 분리하고, 각 단계의 검증 실패는 최대 3회 자동 교정한 뒤에만 사용자에게 실패로 알린다. 이미지 모델도 `flux-2-klein-4b` 실패 시 `flux-1-schnell`로 대체한다.
+문구 생성은 중앙 규칙의 구조화 출력과 교정 지시를 지연 없이 따르도록 Workers AI `@cf/meta/llama-4-scout-17b-16e-instruct`를 사용한다. 모델 호출 자체가 일시적으로 실패하면 `@cf/meta/llama-3.2-3b-instruct`로 한 번 대체하지만, 무료 Neurons 한도 오류에는 대체 모델을 호출하지 않는다. 문안 생성과 이미지 계획 생성을 별도 Queue 단계로 분리하고, 한 번의 Queue 실행에서는 시간 초과를 막기 위해 최대 2회의 교정을 수행한 뒤 실패를 Queue에 돌려보낸다. Queue 전체는 중앙 규칙을 통과할 때까지 최대 10회 전달을 허용하고 그 뒤에만 사용자에게 실패로 알린다. 이미지 모델도 `flux-2-klein-4b` 실패 시 `flux-1-schnell`로 대체한다.
 
 - 저장소 루트의 `reports_*.html`만 탐색
 - `_PREVIEW` 파일 제외

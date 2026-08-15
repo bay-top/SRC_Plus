@@ -29,6 +29,14 @@
 - `/retry` 명령과 실패 작업 뒤의 자연어 입력을 최근 작업의 문안 또는 이미지 계획 재작성 Queue로 연결했다.
 - 일시적인 모델 오류에는 Llama 3.2 3B 텍스트 대체 모델과 FLUX.1 schnell 이미지 대체 모델을 시도하되, 무료 Neurons 한도 오류에는 대체 호출을 하지 않도록 했다.
 - `/jobs`와 실패 알림에는 다음 무료 할당량 초기화 시각을 한국시간으로 표시한다.
+
+## 2026-08-15 전체 경로 검증 결과
+
+- Cloudflare API를 직접 호출해 `@cf/meta/llama-3.2-3b-instruct`와 주 모델 `@cf/meta/llama-4-scout-17b-16e-instruct`가 각각 HTTP 200과 정상 JSON을 반환하는 것을 확인했다.
+- `@cf/black-forest-labs/flux-2-klein-4b`도 multipart 요청에서 HTTP 200과 이미지 payload를 반환했다.
+- 첫 내부 self-test는 한 Queue 실행 안에서 10회 교정을 동기 수행해 실행 시간 제한에 걸렸다. 이 구조는 제거했고, 현재는 한 전달당 최대 2회 교정 후 Queue 전체 최대 10회 전달로 분산한다.
+- 재배포 뒤 self-test를 다시 시작했으나, 앞선 직접 이미지 호출과 self-test 시도로 무료 Neurons 10,000이 다시 소진되어 문안 단계에서 `4006`으로 중단됐다. 따라서 이번 창에서 Worker의 문안→이미지→렌더 전체 실데이터 성공까지는 완료할 수 없었다.
+- 로컬 HTML 파싱과 실제 카드 규칙을 적용한 PPTX 5장 조립은 성공했다. Windows 환경에는 `soffice`/`pdftoppm`가 없어 PNG 렌더는 GitHub Actions 환경에서만 확인할 수 있다.
 - 문안 승인 전에는 title·body만 생성하고 검증한다.
 - 문안 승인 후 `draft_visuals` Queue 단계에서 이미지 계획만 한 번 작성한다.
 - 이미지 프롬프트 스키마는 최소 650자이며, 110~150 영어 단어와 10개 촬영 요소를 요구한다.

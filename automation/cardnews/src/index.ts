@@ -180,7 +180,7 @@ function nextAiQuotaResetLabel(): string {
 }
 function userFacingAiError(message: string): string {
   if (!isAiQuotaError(message)) return message;
-  return `Cloudflare Workers AI 무료 할당량(하루 10,000 Neurons)을 모두 사용했습니다. 무료 사용량은 매일 00:00 UTC, 한국시간 오전 9시에 초기화됩니다. 다음 실행 가능 시각: ${nextAiQuotaResetLabel()} (한국시간). 지금은 작업을 보존했으니 초기화 후 /jobs에서 상태를 확인하고 새 작업을 시작하세요.`;
+  return `Cloudflare Workers AI 무료 할당량(하루 10,000 Neurons)을 모두 사용했다는 작업 당시의 기록입니다. 무료 사용량은 매일 00:00 UTC, 한국시간 오전 9시에 초기화됩니다. 다음 초기화 시각: ${nextAiQuotaResetLabel()} (한국시간). 현재 할당량을 다시 확인하려면 초기화 후 /retry를 실행하세요. 작업은 보존되어 있습니다.`;
 }
 async function runTextModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
   try {
@@ -709,7 +709,7 @@ async function createVisualPlan(env: Env, source: unknown, draft: AiDraft): Prom
     candidate = draft;
   }
   let lastError = '이미지 계획 검증 실패';
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       const normalizeVisual = (visual: { visual_style: 'photo' | 'illustration'; visual_brief_ko: string; visual_prompt: string }) => ({
         visual_style: visual.visual_style, visual_brief_ko: visual.visual_brief_ko, visual_prompt: validateVisualPrompt(visual.visual_prompt),
@@ -721,7 +721,7 @@ async function createVisualPlan(env: Env, source: unknown, draft: AiDraft): Prom
       };
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      if (attempt === 3) break;
+      if (attempt === 2) break;
       candidate = await repairDraftVisuals(env, source, candidate, lastError);
     }
   }
@@ -745,12 +745,12 @@ visual_brief_ko는 사용자가 검토할 한국어 이미지 설명이다.
   if (!result.response) throw new Error('Workers AI가 구조화 응답을 반환하지 않았습니다.');
   let candidate = result.response;
   let lastError = '문안 검증 실패';
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
     try {
       return normalizeCopyDraft(candidate);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      if (attempt === 3) break;
+      if (attempt === 2) break;
       const repaired = await repairDraftCopy(env, source, copyDraftWithPlaceholders(candidate), lastError);
       candidate = copyFields(repaired);
     }
@@ -801,6 +801,15 @@ async function generateImage(env: Env, page: PageRow, seed: number): Promise<Uin
   const result = await runImageModel(env, { multipart: { body: serialized.body, contentType: serialized.headers.get('content-type') } }) as { image?: string };
   if (!result.image) throw new Error('이미지 모델이 이미지를 반환하지 않았습니다.');
   return base64ToBytes(result.image);
+}
+async function generateAndStoreImage(env: Env, jobId: string, page: PageRow, variant: 'a' | 'b', nonce?: string): Promise<void> {
+  const bytes = await generateImage(env, page, seedFor(jobId, page.page_no, variant, nonce));
+  const qa = await assessImage(env, page, bytes);
+  const key = `jobs/${jobId}/images/page-${String(page.page_no).padStart(2, '0')}-${variant}-${nonce ?? 'self-test'}.png`;
+  await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+  const column = variant === 'a' ? 'image_a_key' : 'image_b_key';
+  const qaColumn = variant === 'a' ? 'qa_a_json' : 'qa_b_json';
+  await env.DB.prepare(`UPDATE pages SET ${column}=?,${qaColumn}=?,status='IMAGE_GENERATING',updated_at=? WHERE job_id=? AND page_no=?`).bind(key, JSON.stringify(qa), now(), jobId, page.page_no).run();
 }
 async function assessImage(env: Env, page: PageRow, image: Uint8Array): Promise<Record<string, unknown>> {
   if ((env.VISION_QA_MODE || 'off') === 'off') return { mode: 'off' };
@@ -933,6 +942,7 @@ async function deliverFinal(env: Env, job: JobRow): Promise<void> {
 async function processTask(env: Env, task: QueueTask): Promise<void> {
   const job = await getJob(env, task.jobId);
   if (!job) throw new Error(`작업 ${task.jobId}을 찾지 못했습니다.`);
+  if (job.status === 'CANCELLED' || job.status === 'FINAL_APPROVED') return;
   if (task.type === 'dispatch_parse') {
     await updateJob(env, job.id, { status: 'PARSING', last_error: null });
     await dispatchGithub(env, 'parse', job.id, job.source_path);
@@ -971,7 +981,7 @@ async function processTask(env: Env, task: QueueTask): Promise<void> {
       const reason = error instanceof Error ? error.message : String(error);
       await updateJob(env, job.id, { status: 'FAILED_RETRYABLE', last_error: reason });
       await sendMessage(env, job.chat_id, `이미지 계획을 만들지 못했습니다. 문안은 보존되어 있습니다.\n${userFacingAiError(reason)}\n작업: ${job.id}`);
-      return;
+      throw error;
     }
     await replacePages(env, job.id, visualDraft);
     await updateJob(env, job.id, { status: 'PROMPT_DRAFTED' });
@@ -989,13 +999,7 @@ async function processTask(env: Env, task: QueueTask): Promise<void> {
   if (task.type === 'generate_image') {
     const page = await env.DB.prepare('SELECT * FROM pages WHERE job_id=? AND page_no=?').bind(job.id, task.pageNo).first<PageRow>();
     if (!page || !page.image_required) throw new Error('이미지 생성 대상 페이지가 아닙니다.');
-    const bytes = await generateImage(env, page, seedFor(job.id, page.page_no, task.variant, task.nonce));
-    const qa = await assessImage(env, page, bytes);
-    const key = `jobs/${job.id}/images/page-${String(page.page_no).padStart(2, '0')}-${task.variant}-${task.nonce ?? 'initial'}.png`;
-    await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
-    const column = task.variant === 'a' ? 'image_a_key' : 'image_b_key';
-    const qaColumn = task.variant === 'a' ? 'qa_a_json' : 'qa_b_json';
-    await env.DB.prepare(`UPDATE pages SET ${column}=?,${qaColumn}=?,status='IMAGE_GENERATING',updated_at=? WHERE job_id=? AND page_no=?`).bind(key, JSON.stringify(qa), now(), job.id, page.page_no).run();
+    await generateAndStoreImage(env, job.id, page, task.variant, task.nonce ?? 'initial');
     const notify = await env.DB.prepare(`UPDATE pages SET status='IMAGE_REVIEW_SENT',updated_at=?
       WHERE job_id=? AND page_no=? AND image_a_key IS NOT NULL AND image_b_key IS NOT NULL AND status!='IMAGE_REVIEW_SENT'`)
       .bind(now(), job.id, page.page_no).run();
@@ -1018,13 +1022,13 @@ async function handleQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<vo
       const userReason = userFacingAiError(reason);
       const job = await getJob(env, message.body.jobId);
       if (job) await updateJob(env, job.id, { last_error: reason });
-      const nonRetryable = /daily free allocation|무료 할당량|이미지 프롬프트|이미지 계획 응답|프롬프트가 촬영 장면|문체|문장|제목|부제|정보량|중복|CTA|카드 문구 구조/i.test(reason);
-      if (nonRetryable || message.attempts >= 3) {
+      const nonRetryable = /daily free allocation|free allocation of 10,000 neurons|무료 할당량|4006|3036/i.test(reason);
+      if (nonRetryable || message.attempts >= 10) {
         await markFailure(env, message.body.jobId, error);
         if (job) await sendMessage(env, job.chat_id, `작업 실패 · ${job.id}\n${userReason}`);
         message.ack();
       } else {
-        if (message.attempts === 1 && job) await sendMessage(env, job.chat_id, `처리가 지연되어 한 번 재시도합니다.\n현재 단계: ${message.body.type}\n작업: ${job.id}`);
+        if (message.attempts === 1 && job) await sendMessage(env, job.chat_id, `검증을 통과할 때까지 자동 교정을 이어갑니다(최대 10회).\n현재 단계: ${message.body.type}\n작업: ${job.id}`);
         message.retry({ delaySeconds: Math.min(60, message.attempts * 8) });
       }
     }
