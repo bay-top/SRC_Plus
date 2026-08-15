@@ -8,7 +8,7 @@ Cloudflare Workers AI 한도를 파이프라인의 전제조건으로 두지 않
 
 문구의 단일 기준은 `config/editorial.json`이다. Worker의 최초 생성·수정·전체 재생성, HTML 구조화 파서, PPT 렌더 직전 검증이 모두 이 파일을 읽는다. 글자 수나 문체를 바꿀 때는 다른 프롬프트를 직접 수정하지 않고 이 파일만 변경한다.
 
-문구·이미지·비전 QA는 provider adapter를 통해 실행한다. 무료 기본값은 AI Horde 텍스트 생성, Openverse 공개 라이선스 실사진 검색, 자동 비전 QA 비활성화다. 따라서 Cloudflare Workers AI의 계정 전체 일일 Neurons 한도를 사용하지 않는다. OpenAI 경로는 명시적으로 provider를 바꿔야 하는 선택 경로로만 남겨두었다. 문안 생성과 이미지 계획 생성을 별도 Queue 단계로 분리하고, 한 번의 Queue 실행에서는 시간 초과를 막기 위해 최대 2회의 교정을 수행한 뒤 실패를 Queue에 돌려보낸다. Queue 전체는 중앙 규칙을 통과할 때까지 최대 10회 전달을 허용하고 그 뒤에만 사용자에게 실패로 알린다.
+문구·이미지·비전 QA는 provider adapter를 통해 실행한다. 무료 기본값은 AI Horde 텍스트와 Pollinations AI 이미지 생성, 자동 비전 QA 비활성화다. 따라서 Cloudflare Workers AI의 계정 전체 일일 Neurons 한도를 사용하지 않는다. Pollinations의 현재 공식 `gen` endpoint는 API key를 요구하므로 secret이 있으면 그 경로를 사용하고, 기본 설정은 현재 동작이 확인된 legacy 이미지 endpoint를 3:4에 가까운 512×704로 먼저 시도한다. endpoint가 제한되면 AI Horde 이미지 worker로 자동 fallback한다. 두 경로 모두 대기열·네트워크 시간 초과 시 작업을 보존한 채 `/retry`로 이어간다. OpenAI 경로는 명시적으로 provider를 바꿔야 하는 선택 경로로만 남겨두었다. 문안 생성과 이미지 계획 생성을 별도 Queue 단계로 분리하고, 한 번의 Queue 실행에서는 시간 초과를 막기 위해 최대 2회의 교정을 수행한 뒤 실패를 Queue에 돌려보낸다. Queue 전체는 중앙 규칙을 통과할 때까지 최대 10회 전달을 허용하고 그 뒤에만 사용자에게 실패로 알린다.
 
 - 저장소 루트의 `reports_*.html`만 탐색
 - `_PREVIEW` 파일 제외
@@ -37,7 +37,7 @@ GitHub Actions: 구조화 파싱
         ↓ R2 + HMAC callback
 Cloudflare Worker
   ├─ D1 상태 머신
-  ├─ 무료 AI provider adapter (AI Horde + Openverse)
+  ├─ 무료 AI provider adapter (AI Horde + Pollinations)
   ├─ R2 중간·최종 파일
   └─ Telegram 승인 UI
         ↓ repository_dispatch
@@ -126,7 +126,7 @@ R2_SECRET_ACCESS_KEY
 
 ### AI provider 전환
 
-무료 기본 경로는 별도 provider secret 없이 AI Horde 익명 텍스트 생성과 Openverse 이미지 검색을 사용한다. AI Horde는 커뮤니티 worker 대기열이므로 90초 안에 응답하지 않으면 작업을 보존한 채 실패시키고 `/retry`로 재시도한다. Openverse 이미지는 공개 라이선스의 출처·작성자·라이선스를 QA 정보에 저장해 최종 게시 전에 확인한다. 유료 provider를 사용하려면 provider 변수를 명시적으로 바꾸고 해당 secret을 추가한다.
+무료 기본 경로는 별도 provider secret 없이 AI Horde 익명 텍스트 생성과 Pollinations AI 이미지 생성을 사용한다. Pollinations 이미지 endpoint가 401·429·일시 오류를 반환하면 AI Horde 이미지 worker로 자동 fallback한다. AI Horde는 커뮤니티 worker 대기열이므로 텍스트는 90초, 이미지는 150초 안에 응답하지 않으면 작업을 보존한 채 실패시키고 `/retry`로 재시도한다. Pollinations의 공식 `gen` endpoint를 쓰려면 `POLLINATIONS_API_KEY`를 secret으로 추가할 수 있으며, 키가 없을 때는 현재 동작이 확인된 legacy 이미지 endpoint를 사용한다. legacy endpoint는 공급자 정책 변경에 따라 제한될 수 있으므로 fallback을 제거하지 않는다. 유료 provider를 사용하려면 provider 변수를 명시적으로 바꾸고 해당 secret을 추가한다.
 
 이 무료 모드에서 Cloudflare는 아직 Telegram webhook·D1·R2를 제공하는 호스팅으로만 남아 있고 AI 호출에는 사용되지 않는다. 호스팅까지 완전히 제거하려면 별도 무료 호스팅과 데이터베이스를 선택한 뒤 2단계 이전 문서를 따른다.
 

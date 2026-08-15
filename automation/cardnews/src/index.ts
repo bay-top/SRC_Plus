@@ -29,10 +29,17 @@ interface Env {
   HORDE_BASE_URL?: string;
   HORDE_API_KEY?: string;
   HORDE_TEXT_MODELS?: string;
+  HORDE_IMAGE_MODELS?: string;
   HORDE_TIMEOUT_SECONDS?: string;
+  HORDE_IMAGE_TIMEOUT_SECONDS?: string;
+  HORDE_IMAGE_STEPS?: string;
+  POLLINATIONS_BASE_URL?: string;
+  POLLINATIONS_API_KEY?: string;
+  POLLINATIONS_IMAGE_MODEL?: string;
   OPENVERSE_BASE_URL?: string;
   IMAGE_MODEL: string;
   IMAGE_FALLBACK_MODEL?: string;
+  IMAGE_FALLBACK_PROVIDER?: string;
   IMAGE_PROVIDER?: string;
   VISION_MODEL: string;
   VISION_PROVIDER?: string;
@@ -198,9 +205,9 @@ function userFacingAiError(message: string): string {
   }
   return `외부 AI provider의 사용량 또는 요청 한도에 도달했습니다. 작업은 보존되어 있으며, provider 한도가 회복된 뒤 /retry로 다시 실행할 수 있습니다. 원문과 승인된 문안은 유지됩니다.`;
 }
-function aiProvider(env: Env, kind: 'text' | 'image' | 'vision'): 'cloudflare' | 'openai' | 'horde' | 'openverse' | 'off' {
+function aiProvider(env: Env, kind: 'text' | 'image' | 'vision'): 'cloudflare' | 'openai' | 'horde' | 'pollinations' | 'openverse' | 'off' {
   const configured = (kind === 'text' ? env.TEXT_PROVIDER : kind === 'image' ? env.IMAGE_PROVIDER : env.VISION_PROVIDER)?.trim().toLowerCase();
-  if (configured === 'cloudflare' || configured === 'openai' || configured === 'horde' || configured === 'openverse' || configured === 'off') return configured;
+  if (configured === 'cloudflare' || configured === 'openai' || configured === 'horde' || configured === 'pollinations' || configured === 'openverse' || configured === 'off') return configured;
   return env.OPENAI_API_KEY?.trim() ? 'openai' : 'cloudflare';
 }
 function openAiBaseUrl(env: Env): string { return (env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1').replace(/\/$/, ''); }
@@ -208,6 +215,9 @@ function hordeBaseUrl(env: Env): string { return (env.HORDE_BASE_URL?.trim() || 
 function hordeApiKey(env: Env): string { return env.HORDE_API_KEY?.trim() || '0000000000'; }
 function hordeModels(env: Env): string[] {
   return (env.HORDE_TEXT_MODELS?.trim() || 'google/gemma-4-31b,koboldcpp/L3-Super-Nova-RP-8B').split(',').map((model) => model.trim()).filter(Boolean);
+}
+function hordeImageModels(env: Env): string[] {
+  return (env.HORDE_IMAGE_MODELS?.trim() || 'ICBINP - I Can\'t Believe It\'s Not Photography,Realistic Vision,Flux.1-Schnell fp8 (Compact),stable_diffusion').split(',').map((model) => model.trim()).filter(Boolean);
 }
 function hordePrompt(input: Record<string, unknown>): string {
   const messages = Array.isArray(input.messages) ? input.messages as Array<Record<string, unknown>> : [];
@@ -232,6 +242,55 @@ async function runHordeText(env: Env, input: Record<string, unknown>): Promise<{
     if (result.done && result.generations?.[0]?.text) return { response: parseJsonContent(result.generations[0].text) };
   }
   throw new Error('AI Horde text generation timed out.');
+}
+async function runHordeImage(env: Env, input: Record<string, unknown>): Promise<{ image: string; contentType: string }> {
+  const headers = { apikey: hordeApiKey(env), 'client-agent': 'SRCPlus:free-pipeline/1.0', 'content-type': 'application/json' };
+  const width = Math.min(Math.max(Math.floor(Number(input.width ?? 512) / 64) * 64, 256), 512);
+  const height = Math.min(Math.max(Math.floor(Number(input.height ?? 704) / 64) * 64, 256), 704);
+  const steps = Math.min(Math.max(Number(env.HORDE_IMAGE_STEPS ?? 8), 4), 12);
+  const prompt = `RAW editorial photograph, photorealistic documentary image for a serious economics magazine. Natural lens perspective, believable materials and light, no illustration, no CGI, no 3D render, no text, no logo, no watermark. ${String(input.prompt ?? '')}`;
+  const submit = await fetch(`${hordeBaseUrl(env)}/v2/generate/async`, {
+    method: 'POST', headers,
+    body: JSON.stringify({
+      prompt,
+      params: { width, height, steps, n: 1, sampler_name: 'k_euler', cfg_scale: 4 },
+      models: hordeImageModels(env), nsfw: false, trusted_workers: true,
+    }),
+  });
+  const queued = await submit.json() as { id?: string; message?: string; errors?: unknown; kudos?: number };
+  if (!submit.ok || !queued.id) throw new Error(`AI Horde image ${submit.status}: ${queued.message ?? JSON.stringify(queued.errors ?? '')}`);
+  const timeout = Math.min(Math.max(Number(env.HORDE_IMAGE_TIMEOUT_SECONDS ?? 150), 30), 300);
+  const deadline = Date.now() + timeout * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 5000));
+    const status = await fetch(`${hordeBaseUrl(env)}/v2/generate/status/${encodeURIComponent(queued.id)}`, { headers: { apikey: hordeApiKey(env), 'client-agent': 'SRCPlus:free-pipeline/1.0' } });
+    const result = await status.json() as { done?: boolean; faulted?: boolean; generations?: Array<{ img?: string; censored?: boolean }> };
+    if (result.faulted) throw new Error('AI Horde image generation failed.');
+    const generation = result.generations?.[0];
+    if (result.done && generation?.img && !generation.censored) {
+      const image = await fetch(generation.img, { headers: { 'user-agent': 'SRCPlus-free-pipeline/1.0' } });
+      if (!image.ok) throw new Error(`AI Horde image download ${image.status}`);
+      return { image: bytesToBase64(new Uint8Array(await image.arrayBuffer())), contentType: image.headers.get('content-type') ?? 'image/png' };
+    }
+  }
+  throw new Error('AI Horde image generation timed out.');
+}
+function pollinationsBaseUrl(env: Env): string { return (env.POLLINATIONS_BASE_URL?.trim() || 'https://image.pollinations.ai').replace(/\/$/, ''); }
+async function runPollinationsImage(env: Env, input: Record<string, unknown>): Promise<{ image: string; contentType: string }> {
+  const prompt = String(input.prompt ?? '');
+  if (!prompt) throw new Error('Pollinations 이미지 프롬프트가 비어 있습니다.');
+  const width = Math.min(Math.max(Math.floor(Number(input.width ?? 512) / 64) * 64, 256), 512);
+  const height = Math.min(Math.max(Math.floor(Number(input.height ?? 704) / 64) * 64, 256), 704);
+  const model = encodeURIComponent(env.POLLINATIONS_IMAGE_MODEL?.trim() || 'flux');
+  const endpoint = env.POLLINATIONS_API_KEY?.trim()
+    ? `https://gen.pollinations.ai/image/${encodeURIComponent(prompt)}`
+    : `${pollinationsBaseUrl(env)}/prompt/${encodeURIComponent(prompt)}`;
+  const url = `${endpoint}?model=${model}&width=${width}&height=${height}&nologo=true&enhance=false&safe=true`;
+  const headers: Record<string, string> = { accept: 'image/jpeg,image/png,image/webp', 'user-agent': 'SRCPlus-free-pipeline/1.0' };
+  if (env.POLLINATIONS_API_KEY?.trim()) headers.authorization = `Bearer ${env.POLLINATIONS_API_KEY.trim()}`;
+  const response = await fetch(url, { headers });
+  if (!response.ok) throw new Error(`Pollinations image ${response.status}`);
+  return { image: bytesToBase64(new Uint8Array(await response.arrayBuffer())), contentType: response.headers.get('content-type') ?? 'image/jpeg' };
 }
 function openverseBaseUrl(env: Env): string { return (env.OPENVERSE_BASE_URL?.trim() || 'https://api.openverse.org/v1').replace(/\/$/, ''); }
 function stockSearchQuery(prompt: string): string {
@@ -308,8 +367,16 @@ async function runTextModel(env: Env, input: Record<string, unknown>): Promise<u
   }
 }
 async function runImageModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
+  if (aiProvider(env, 'image') === 'horde') return runHordeImage(env, input);
+  if (aiProvider(env, 'image') === 'pollinations') {
+    try {
+      return await runPollinationsImage(env, input);
+    } catch (error) {
+      if (env.IMAGE_FALLBACK_PROVIDER?.trim().toLowerCase() === 'horde') return runHordeImage(env, input);
+      throw error;
+    }
+  }
   if (aiProvider(env, 'image') === 'openverse') return runOpenverseImage(env, input);
-  if (aiProvider(env, 'image') === 'horde') throw new Error('AI Horde image는 무료 fallback으로만 지원하며, 기본 무료 경로는 Openverse 실사진 검색입니다.');
   if (aiProvider(env, 'image') === 'openai') {
     const apiKey = env.OPENAI_API_KEY?.trim();
     if (!apiKey) throw new Error('OpenAI provider가 선택됐지만 OPENAI_API_KEY가 설정되지 않았습니다.');
@@ -347,7 +414,7 @@ async function runImageModel(env: Env, input: Record<string, unknown>): Promise<
 async function runVisionModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
   if (aiProvider(env, 'vision') === 'off') return { response: { mode: 'off' } };
   if (aiProvider(env, 'vision') === 'openai') return runOpenAiChat(env, input, env.OPENAI_VISION_MODEL?.trim() || env.OPENAI_TEXT_MODEL?.trim() || 'gpt-4o-mini');
-  if (aiProvider(env, 'vision') === 'horde' || aiProvider(env, 'vision') === 'openverse') return { response: { mode: 'advisory', note: '무료 모드에서는 자동 비전 QA를 생략하고 Telegram 사람 검수를 사용합니다.' } };
+  if (aiProvider(env, 'vision') === 'horde' || aiProvider(env, 'vision') === 'pollinations' || aiProvider(env, 'vision') === 'openverse') return { response: { mode: 'advisory', note: '무료 모드에서는 자동 비전 QA를 생략하고 Telegram 사람 검수를 사용합니다.' } };
   return env.AI.run(env.VISION_MODEL, input);
 }
 function json(data: unknown, status = 200): Response {
