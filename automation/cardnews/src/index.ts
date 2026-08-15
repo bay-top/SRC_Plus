@@ -238,7 +238,7 @@ function stockSearchQuery(prompt: string): string {
   const subject = prompt.split(/subject and scene:\s*/i)[1] ?? prompt;
   return subject.replace(/\b(?:no|without|avoid|never|not|keep|use|make|ensure|include|featuring|vertical|editorial|photograph|photo|photographic|realistic|premium|Getty Images|3:4|full bleed)\b[^,.]*[,.;]?/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
 }
-async function runOpenverseImage(env: Env, input: Record<string, unknown>): Promise<{ image: string; source?: Record<string, string> }> {
+async function runOpenverseImage(env: Env, input: Record<string, unknown>): Promise<{ image: string; contentType: string; source?: Record<string, string> }> {
   const query = stockSearchQuery(String(input.prompt ?? ''));
   if (!query) throw new Error('Openverse 검색어를 만들지 못했습니다.');
   const url = `${openverseBaseUrl(env)}/images/?q=${encodeURIComponent(query)}&page_size=20&license_type=commercial&filter_dead=true`;
@@ -257,7 +257,7 @@ async function runOpenverseImage(env: Env, input: Record<string, unknown>): Prom
         if (!image.ok) continue;
         const bytes = new Uint8Array(await image.arrayBuffer());
         if (bytes.length < 10000) continue;
-        return { image: bytesToBase64(bytes), source: { url: imageUrl, landing_url: candidate.foreign_landing_url ?? imageUrl, title: candidate.title ?? '', creator: candidate.creator ?? '', license: candidate.license ?? '', license_url: candidate.license_url ?? '', attribution: candidate.attribution ?? '' } };
+        return { image: bytesToBase64(bytes), contentType: image.headers.get('content-type') ?? 'image/jpeg', source: { url: imageUrl, landing_url: candidate.foreign_landing_url ?? imageUrl, title: candidate.title ?? '', creator: candidate.creator ?? '', license: candidate.license ?? '', license_url: candidate.license_url ?? '', attribution: candidate.attribution ?? '' } };
       } catch { /* try the next candidate */ }
     }
   }
@@ -937,23 +937,24 @@ async function revisePrompts(env: Env, source: unknown, pages: PageRow[], instru
     .bind(page.visual_style === 'illustration' ? 'illustration' : 'photo', clamp(page.visual_brief_ko.trim(), 280), validateVisualPrompt(page.visual_prompt), now(), targets[0].job_id, page.page_no));
   await env.DB.batch(statements);
 }
-interface GeneratedImage { bytes: Uint8Array; source?: Record<string, string>; }
+interface GeneratedImage { bytes: Uint8Array; contentType: string; source?: Record<string, string>; }
 async function generateImage(env: Env, page: PageRow, seed: number): Promise<GeneratedImage> {
   const policy = page.visual_style === 'illustration' ? IMAGE_POLICY_ILLUSTRATION : IMAGE_POLICY_PHOTO;
   const result = await runImageModel(env, {
     prompt: `${policy} Subject and scene: ${page.visual_prompt}`,
     width: env.IMAGE_WIDTH || '960', height: env.IMAGE_HEIGHT || '1280', seed,
-  }) as { image?: string; source?: Record<string, string> };
+  }) as { image?: string; contentType?: string; source?: Record<string, string> };
   if (!result.image) throw new Error('이미지 provider가 이미지를 반환하지 않았습니다.');
-  return { bytes: base64ToBytes(result.image), source: result.source };
+  return { bytes: base64ToBytes(result.image), contentType: result.contentType ?? 'image/png', source: result.source };
 }
 async function generateAndStoreImage(env: Env, jobId: string, page: PageRow, variant: 'a' | 'b', nonce?: string): Promise<void> {
   const generated = await generateImage(env, page, seedFor(jobId, page.page_no, variant, nonce));
   const bytes = generated.bytes;
   const qa = await assessImage(env, page, bytes);
   if (generated.source) qa.source = generated.source;
-  const key = `jobs/${jobId}/images/page-${String(page.page_no).padStart(2, '0')}-${variant}-${nonce ?? 'initial'}.png`;
-  await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
+  const extension = generated.contentType.includes('webp') ? 'webp' : generated.contentType.includes('jpeg') || generated.contentType.includes('jpg') ? 'jpg' : 'png';
+  const key = `jobs/${jobId}/images/page-${String(page.page_no).padStart(2, '0')}-${variant}-${nonce ?? 'initial'}.${extension}`;
+  await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: generated.contentType } });
   const column = variant === 'a' ? 'image_a_key' : 'image_b_key';
   const qaColumn = variant === 'a' ? 'qa_a_json' : 'qa_b_json';
   await env.DB.prepare(`UPDATE pages SET ${column}=?,${qaColumn}=?,status='IMAGE_GENERATING',updated_at=? WHERE job_id=? AND page_no=?`).bind(key, JSON.stringify(qa), now(), jobId, page.page_no).run();
