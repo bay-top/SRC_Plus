@@ -999,7 +999,9 @@ function qaCaption(jsonText: string | null): string {
     if (Number(qa.editorial_tone_score ?? 0) < 4) flags.push('에디토리얼 톤 재검토');
     if (Number(qa.realism_score ?? 0) < 4) flags.push('현실감 재검토');
     const scores = `문맥 ${String(qa.semantic_fit_score ?? '-')} · 톤 ${String(qa.editorial_tone_score ?? '-')} · 현실감 ${String(qa.realism_score ?? '-')}`;
-    return flags.length ? `주의: ${flags.join(', ')} · ${scores} · ${String(qa.notes_ko ?? '')}` : `자동 QA · ${scores} · ${String(qa.notes_ko ?? '')}`;
+    const source = qa.source as Record<string, unknown> | undefined;
+    const sourceNote = source?.landing_url ? ` · 출처 ${String(source.landing_url)} · ${String(source.license ?? '')} · ${String(source.creator ?? '')}` : '';
+    return flags.length ? `주의: ${flags.join(', ')} · ${scores} · ${String(qa.notes_ko ?? '')}${sourceNote}` : `자동 QA · ${scores} · ${String(qa.notes_ko ?? '')}${sourceNote}`;
   } catch { return '자동 QA 결과 해석 실패'; }
 }
 
@@ -1054,7 +1056,10 @@ async function buildRenderManifest(env: Env, job: JobRow): Promise<string> {
   const manifestPages = pages.map((page) => {
     const imageKey = page.image_required ? page.selected_key : selected.get(page.reuse_page_no ?? -1);
     if (!imageKey) throw new Error(`${page.page_no}페이지 이미지가 선택되지 않았습니다.`);
-    return { page_no: page.page_no, page_kind: page.page_kind, title: page.title, body: page.body, image_key: imageKey, reuse_page_no: page.reuse_page_no };
+    const qaText = imageKey === page.image_a_key ? page.qa_a_json : page.qa_b_json;
+    let imageSource: unknown = undefined;
+    try { imageSource = qaText ? JSON.parse(qaText).source : undefined; } catch { imageSource = undefined; }
+    return { page_no: page.page_no, page_kind: page.page_kind, title: page.title, body: page.body, image_key: imageKey, image_source: imageSource, reuse_page_no: page.reuse_page_no };
   });
   const key = `jobs/${job.id}/render-manifest.json`;
   await env.ASSETS.put(key, JSON.stringify({ job_id: job.id, source_path: job.source_path, report_title: job.report_title, category: job.report_category, pages: manifestPages }, null, 2), { httpMetadata: { contentType: 'application/json' } });
