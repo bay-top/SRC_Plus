@@ -2,6 +2,8 @@
 
 기존 `reports_*.html` 리포트 게시 흐름은 유지하고, 게시된 최종 HTML을 Telegram에서 선택해 SRC Plus 카드뉴스 PPTX와 PNG ZIP을 생성한다. 개인 컴퓨터가 꺼져 있어도 Cloudflare Worker와 GitHub Actions에서 실행된다.
 
+Cloudflare Workers AI 한도를 파이프라인의 전제조건으로 두지 않는다. 외부 provider와 GitHub Actions 실행기로 옮기는 단계별 설계는 [`evaluation/pipeline-redesign-no-cloudflare-ai-2026-08-15.md`](evaluation/pipeline-redesign-no-cloudflare-ai-2026-08-15.md)에 기록되어 있다.
+
 ## 반영된 운영 규칙
 
 문구의 단일 기준은 `config/editorial.json`이다. Worker의 최초 생성·수정·전체 재생성, HTML 구조화 파서, PPT 렌더 직전 검증이 모두 이 파일을 읽는다. 글자 수나 문체를 바꿀 때는 다른 프롬프트를 직접 수정하지 않고 이 파일만 변경한다.
