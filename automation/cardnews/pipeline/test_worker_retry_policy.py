@@ -24,11 +24,12 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         source = (ROOT / "src" / "index.ts").read_text(encoding="utf-8")
         config = json.loads((ROOT / "wrangler.template.jsonc").read_text(encoding="utf-8"))
         variables = config["vars"]
-        self.assertEqual(variables["TEXT_PROVIDER"], "auto")
-        self.assertEqual(variables["IMAGE_PROVIDER"], "auto")
-        self.assertEqual(variables["VISION_PROVIDER"], "auto")
-        self.assertIn("/chat/completions", source)
-        self.assertIn("/images/generations", source)
+        self.assertEqual(variables["TEXT_PROVIDER"], "horde")
+        self.assertEqual(variables["IMAGE_PROVIDER"], "openverse")
+        self.assertEqual(variables["VISION_PROVIDER"], "off")
+        self.assertIn("/v2/generate/text/async", source)
+        self.assertIn("api.openverse.org", source)
+        self.assertIn("/chat/completions", source)  # paid provider remains an explicit opt-in
         self.assertIn("runVisionModel", source)
         self.assertIn("OPENAI_API_KEY", source)
 

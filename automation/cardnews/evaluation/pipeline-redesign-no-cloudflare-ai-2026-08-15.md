@@ -2,7 +2,7 @@
 
 ## 결론
 
-Cloudflare Workers AI를 카드뉴스 생성 경로에서 제거한다. Cloudflare의 계정 전체 무료 Neurons 한도가 문안 교정, 이미지 계획, 이미지 생성, 비전 QA를 함께 막는 현재 구조는 운영 기준에 맞지 않는다.
+Cloudflare Workers AI를 카드뉴스 생성 경로에서 제거한다. Cloudflare의 계정 전체 무료 Neurons 한도가 문안 교정, 이미지 계획, 이미지 생성, 비전 QA를 함께 막는 현재 구조는 운영 기준에 맞지 않는다. 무료 실행 경로는 AI Horde 텍스트와 Openverse 공개 라이선스 실사진 검색을 사용한다.
 
 1단계에서는 기존 Worker를 Telegram·승인·상태 전달용 얇은 오케스트레이터로만 남기고, AI 실행은 GitHub Actions의 단일 장시간 작업으로 이동한다. 2단계에서는 새 호스팅과 데이터베이스 인증이 준비되면 webhook·상태 저장까지 Worker 밖으로 옮긴다.
 
@@ -61,5 +61,4 @@ GitHub Actions cardnews-run
 
 ## 선행 조건
 
-현재 GitHub 저장소에는 Cloudflare 관련 secret만 있다. OpenAI, Gemini, Anthropic provider secret이 없으므로 1단계 외부 AI 경로는 인증 추가 전까지 활성화할 수 없다. 비용이 발생할 수 있는 provider 선택과 secret 등록은 사용자의 명시적 선택이 필요하다.
-
+무료 실행 경로는 별도 provider secret 없이 시작할 수 있다. 다만 AI Horde는 커뮤니티 대기열이고 Openverse는 공개 라이선스 검색이므로, 중앙 규칙 검증과 사람 검수를 최종 게이트로 유지한다. 호스팅까지 Cloudflare 밖으로 옮기는 단계에는 별도 무료 호스팅·DB 인증이 필요하다.

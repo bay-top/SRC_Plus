@@ -26,6 +26,11 @@ interface Env {
   TEXT_MODEL: string;
   TEXT_FALLBACK_MODEL?: string;
   TEXT_PROVIDER?: string;
+  HORDE_BASE_URL?: string;
+  HORDE_API_KEY?: string;
+  HORDE_TEXT_MODELS?: string;
+  HORDE_TIMEOUT_SECONDS?: string;
+  OPENVERSE_BASE_URL?: string;
   IMAGE_MODEL: string;
   IMAGE_FALLBACK_MODEL?: string;
   IMAGE_PROVIDER?: string;
@@ -193,12 +198,71 @@ function userFacingAiError(message: string): string {
   }
   return `외부 AI provider의 사용량 또는 요청 한도에 도달했습니다. 작업은 보존되어 있으며, provider 한도가 회복된 뒤 /retry로 다시 실행할 수 있습니다. 원문과 승인된 문안은 유지됩니다.`;
 }
-function aiProvider(env: Env, kind: 'text' | 'image' | 'vision'): 'cloudflare' | 'openai' {
+function aiProvider(env: Env, kind: 'text' | 'image' | 'vision'): 'cloudflare' | 'openai' | 'horde' | 'openverse' | 'off' {
   const configured = (kind === 'text' ? env.TEXT_PROVIDER : kind === 'image' ? env.IMAGE_PROVIDER : env.VISION_PROVIDER)?.trim().toLowerCase();
-  if (configured === 'cloudflare' || configured === 'openai') return configured;
+  if (configured === 'cloudflare' || configured === 'openai' || configured === 'horde' || configured === 'openverse' || configured === 'off') return configured;
   return env.OPENAI_API_KEY?.trim() ? 'openai' : 'cloudflare';
 }
 function openAiBaseUrl(env: Env): string { return (env.OPENAI_BASE_URL?.trim() || 'https://api.openai.com/v1').replace(/\/$/, ''); }
+function hordeBaseUrl(env: Env): string { return (env.HORDE_BASE_URL?.trim() || 'https://stablehorde.net/api').replace(/\/$/, ''); }
+function hordeApiKey(env: Env): string { return env.HORDE_API_KEY?.trim() || '0000000000'; }
+function hordeModels(env: Env): string[] {
+  return (env.HORDE_TEXT_MODELS?.trim() || 'google/gemma-4-31b,koboldcpp/L3-Super-Nova-RP-8B').split(',').map((model) => model.trim()).filter(Boolean);
+}
+function hordePrompt(input: Record<string, unknown>): string {
+  const messages = Array.isArray(input.messages) ? input.messages as Array<Record<string, unknown>> : [];
+  return `${messages.map((message) => `${String(message.role ?? 'user').toUpperCase()}: ${typeof message.content === 'string' ? message.content : JSON.stringify(message.content ?? '')}`).join('\n\n')}\n\nASSISTANT: JSON 객체만 반환한다. 마크다운 코드펜스와 설명을 붙이지 않는다.`;
+}
+async function runHordeText(env: Env, input: Record<string, unknown>): Promise<{ response: Record<string, unknown> }> {
+  const headers = { apikey: hordeApiKey(env), 'client-agent': 'SRCPlus:free-pipeline/1.0', 'content-type': 'application/json' };
+  const maxLength = Math.min(Math.max(Number(input.max_tokens ?? 2048), 256), 4096);
+  const submit = await fetch(`${hordeBaseUrl(env)}/v2/generate/text/async`, {
+    method: 'POST', headers,
+    body: JSON.stringify({ prompt: hordePrompt(input), params: { max_length: maxLength, temperature: Number(input.temperature ?? 0.2), top_p: 0.9 }, models: hordeModels(env), trusted_workers: true }),
+  });
+  const queued = await submit.json() as { id?: string; message?: string; errors?: unknown };
+  if (!submit.ok || !queued.id) throw new Error(`AI Horde text ${submit.status}: ${queued.message ?? JSON.stringify(queued.errors ?? '')}`);
+  const timeout = Math.min(Math.max(Number(env.HORDE_TIMEOUT_SECONDS ?? 75), 15), 180);
+  const deadline = Date.now() + timeout * 1000;
+  while (Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 4000));
+    const status = await fetch(`${hordeBaseUrl(env)}/v2/generate/text/status/${encodeURIComponent(queued.id)}`, { headers: { apikey: hordeApiKey(env), 'client-agent': 'SRCPlus:free-pipeline/1.0' } });
+    const result = await status.json() as { done?: boolean; faulted?: boolean; generations?: Array<{ text?: string }> };
+    if (result.faulted) throw new Error('AI Horde text generation failed.');
+    if (result.done && result.generations?.[0]?.text) return { response: parseJsonContent(result.generations[0].text) };
+  }
+  throw new Error('AI Horde text generation timed out.');
+}
+function openverseBaseUrl(env: Env): string { return (env.OPENVERSE_BASE_URL?.trim() || 'https://api.openverse.org/v1').replace(/\/$/, ''); }
+function stockSearchQuery(prompt: string): string {
+  const subject = prompt.split(/subject and scene:\s*/i)[1] ?? prompt;
+  return subject.replace(/\b(?:no|without|avoid|never|not|keep|use|make|ensure|include|featuring|vertical|editorial|photograph|photo|photographic|realistic|premium|Getty Images|3:4|full bleed)\b[^,.]*[,.;]?/gi, ' ').replace(/\s+/g, ' ').trim().slice(0, 180);
+}
+async function runOpenverseImage(env: Env, input: Record<string, unknown>): Promise<{ image: string; source?: Record<string, string> }> {
+  const query = stockSearchQuery(String(input.prompt ?? ''));
+  if (!query) throw new Error('Openverse 검색어를 만들지 못했습니다.');
+  const url = `${openverseBaseUrl(env)}/images/?q=${encodeURIComponent(query)}&page_size=20&license_type=commercial&filter_dead=true`;
+  const response = await fetch(url, { headers: { accept: 'application/json', 'user-agent': 'SRCPlus-free-pipeline/1.0' } });
+  if (!response.ok) throw new Error(`Openverse search ${response.status}`);
+  const payload = await response.json() as { results?: Array<{ url?: string; thumbnail?: string; title?: string; creator?: string; license?: string; license_url?: string; foreign_landing_url?: string; width?: number; height?: number; attribution?: string }> };
+  const candidates = (payload.results ?? []).filter((item) => item.url || item.thumbnail).sort((a, b) => {
+    const aRatio = Number(a.width ?? 0) / Math.max(Number(a.height ?? 1), 1);
+    const bRatio = Number(b.width ?? 0) / Math.max(Number(b.height ?? 1), 1);
+    return Math.abs(aRatio - 0.75) - Math.abs(bRatio - 0.75);
+  });
+  for (const candidate of candidates.slice(0, 8)) {
+    for (const imageUrl of [candidate.url, candidate.thumbnail].filter(Boolean) as string[]) {
+      try {
+        const image = await fetch(imageUrl, { headers: { 'user-agent': 'SRCPlus-free-pipeline/1.0' } });
+        if (!image.ok) continue;
+        const bytes = new Uint8Array(await image.arrayBuffer());
+        if (bytes.length < 10000) continue;
+        return { image: bytesToBase64(bytes), source: { url: imageUrl, landing_url: candidate.foreign_landing_url ?? imageUrl, title: candidate.title ?? '', creator: candidate.creator ?? '', license: candidate.license ?? '', license_url: candidate.license_url ?? '', attribution: candidate.attribution ?? '' } };
+      } catch { /* try the next candidate */ }
+    }
+  }
+  throw new Error('Openverse에서 조건에 맞는 이미지를 찾지 못했습니다.');
+}
 function parseJsonContent(value: unknown): Record<string, unknown> {
   const text = typeof value === 'string' ? value.trim() : JSON.stringify(value ?? '');
   const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '').trim();
@@ -233,6 +297,7 @@ async function runOpenAiChat(env: Env, input: Record<string, unknown>, model: st
 }
 async function runTextModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
   if (aiProvider(env, 'text') === 'openai') return runOpenAiChat(env, input, env.OPENAI_TEXT_MODEL?.trim() || 'gpt-4o-mini');
+  if (aiProvider(env, 'text') === 'horde') return runHordeText(env, input);
   try {
     return await env.AI.run(env.TEXT_MODEL, input);
   } catch (error) {
@@ -243,6 +308,8 @@ async function runTextModel(env: Env, input: Record<string, unknown>): Promise<u
   }
 }
 async function runImageModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
+  if (aiProvider(env, 'image') === 'openverse') return runOpenverseImage(env, input);
+  if (aiProvider(env, 'image') === 'horde') throw new Error('AI Horde image는 무료 fallback으로만 지원하며, 기본 무료 경로는 Openverse 실사진 검색입니다.');
   if (aiProvider(env, 'image') === 'openai') {
     const apiKey = env.OPENAI_API_KEY?.trim();
     if (!apiKey) throw new Error('OpenAI provider가 선택됐지만 OPENAI_API_KEY가 설정되지 않았습니다.');
@@ -278,7 +345,9 @@ async function runImageModel(env: Env, input: Record<string, unknown>): Promise<
   }
 }
 async function runVisionModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
+  if (aiProvider(env, 'vision') === 'off') return { response: { mode: 'off' } };
   if (aiProvider(env, 'vision') === 'openai') return runOpenAiChat(env, input, env.OPENAI_VISION_MODEL?.trim() || env.OPENAI_TEXT_MODEL?.trim() || 'gpt-4o-mini');
+  if (aiProvider(env, 'vision') === 'horde' || aiProvider(env, 'vision') === 'openverse') return { response: { mode: 'advisory', note: '무료 모드에서는 자동 비전 QA를 생략하고 Telegram 사람 검수를 사용합니다.' } };
   return env.AI.run(env.VISION_MODEL, input);
 }
 function json(data: unknown, status = 200): Response {
@@ -868,18 +937,21 @@ async function revisePrompts(env: Env, source: unknown, pages: PageRow[], instru
     .bind(page.visual_style === 'illustration' ? 'illustration' : 'photo', clamp(page.visual_brief_ko.trim(), 280), validateVisualPrompt(page.visual_prompt), now(), targets[0].job_id, page.page_no));
   await env.DB.batch(statements);
 }
-async function generateImage(env: Env, page: PageRow, seed: number): Promise<Uint8Array> {
+interface GeneratedImage { bytes: Uint8Array; source?: Record<string, string>; }
+async function generateImage(env: Env, page: PageRow, seed: number): Promise<GeneratedImage> {
   const policy = page.visual_style === 'illustration' ? IMAGE_POLICY_ILLUSTRATION : IMAGE_POLICY_PHOTO;
   const result = await runImageModel(env, {
     prompt: `${policy} Subject and scene: ${page.visual_prompt}`,
     width: env.IMAGE_WIDTH || '960', height: env.IMAGE_HEIGHT || '1280', seed,
-  }) as { image?: string };
-  if (!result.image) throw new Error('이미지 모델이 이미지를 반환하지 않았습니다.');
-  return base64ToBytes(result.image);
+  }) as { image?: string; source?: Record<string, string> };
+  if (!result.image) throw new Error('이미지 provider가 이미지를 반환하지 않았습니다.');
+  return { bytes: base64ToBytes(result.image), source: result.source };
 }
 async function generateAndStoreImage(env: Env, jobId: string, page: PageRow, variant: 'a' | 'b', nonce?: string): Promise<void> {
-  const bytes = await generateImage(env, page, seedFor(jobId, page.page_no, variant, nonce));
+  const generated = await generateImage(env, page, seedFor(jobId, page.page_no, variant, nonce));
+  const bytes = generated.bytes;
   const qa = await assessImage(env, page, bytes);
+  if (generated.source) qa.source = generated.source;
   const key = `jobs/${jobId}/images/page-${String(page.page_no).padStart(2, '0')}-${variant}-${nonce ?? 'initial'}.png`;
   await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
   const column = variant === 'a' ? 'image_a_key' : 'image_b_key';
