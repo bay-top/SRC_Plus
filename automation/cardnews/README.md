@@ -6,7 +6,7 @@
 
 문구의 단일 기준은 `config/editorial.json`이다. Worker의 최초 생성·수정·전체 재생성, HTML 구조화 파서, PPT 렌더 직전 검증이 모두 이 파일을 읽는다. 글자 수나 문체를 바꿀 때는 다른 프롬프트를 직접 수정하지 않고 이 파일만 변경한다.
 
-문구 생성은 중앙 규칙의 구조화 출력과 교정 지시를 지연 없이 따르도록 Workers AI `@cf/meta/llama-4-scout-17b-16e-instruct`를 사용한다. 이미지 생성과 비전 QA 모델은 별도로 유지한다.
+문구 생성은 중앙 규칙의 구조화 출력과 교정 지시를 지연 없이 따르도록 Workers AI `@cf/meta/llama-4-scout-17b-16e-instruct`를 사용한다. 모델 호출 자체가 일시적으로 실패하면 `@cf/meta/llama-3.2-3b-instruct`로 한 번 대체하지만, 무료 Neurons 한도 오류에는 대체 모델을 호출하지 않는다. 문안 생성과 이미지 계획 생성을 별도 Queue 단계로 분리하고, 각 단계의 검증 실패는 최대 3회 자동 교정한 뒤에만 사용자에게 실패로 알린다. 이미지 모델도 `flux-2-klein-4b` 실패 시 `flux-1-schnell`로 대체한다.
 
 - 저장소 루트의 `reports_*.html`만 탐색
 - `_PREVIEW` 파일 제외
@@ -23,6 +23,7 @@
 - 이미지는 사실적 편집 사진을 기본으로 하고, 개념 표현에만 자연스러운 일러스트 사용
 - 이미지 프롬프트에서 기업명·로고·간판·텍스트·숫자·워터마크를 금지
 - 비전 QA는 advisory 모드이며, 최종 선택은 Telegram에서 사람이 수행
+- 실패 작업은 `/retry`로 이어서 실행할 수 있고, 실패 뒤 보내는 자연어 수정 요청도 가장 최근 작업의 문안·이미지 계획 재작성으로 연결
 - Instagram 자동 게시는 포함하지 않음
 
 ## 구조
@@ -182,6 +183,7 @@ SELECTED → PARSING → SOURCE_PARSED
 ## 보안
 
 - Telegram webhook `secret_token` 검증
+- Queue 단계별 상태(`COPY_DRAFTING`, `PROMPT_DRAFTING`, `IMAGE_GENERATING`)와 실패 원인을 Telegram에 즉시 알림
 - `/claim` 1회 관리자 등록 또는 고정 chat ID 허용목록
 - GitHub PAT 저장소 범위 제한
 - GitHub Actions callback HMAC-SHA256 검증

@@ -39,10 +39,12 @@
     "GITHUB_BRANCH": "main",
     "ALLOWED_CHAT_ID": "",
     "TEXT_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "TEXT_FALLBACK_MODEL": "@cf/meta/llama-3.2-3b-instruct",
     "IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-4b",
+    "IMAGE_FALLBACK_MODEL": "@cf/black-forest-labs/flux-1-schnell",
     "VISION_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct",
     "VISION_QA_MODE": "advisory",
-    "IMAGE_WIDTH": "768",
-    "IMAGE_HEIGHT": "1024"
+    "IMAGE_WIDTH": "960",
+    "IMAGE_HEIGHT": "1280"
   }
 }

@@ -2,12 +2,13 @@ import editorialRules from '../config/editorial.json';
 
 type JobStatus =
   | 'SELECTED' | 'PARSING' | 'SOURCE_PARSED' | 'COPY_DRAFTING' | 'COPY_DRAFTED'
-  | 'COPY_APPROVED' | 'IMAGE_GENERATING' | 'IMAGES_GENERATED' | 'RENDERING'
+  | 'COPY_APPROVED' | 'PROMPT_DRAFTING' | 'PROMPT_DRAFTED' | 'IMAGE_GENERATING' | 'IMAGES_GENERATED' | 'RENDERING'
   | 'RENDERED' | 'FINAL_APPROVED' | 'FAILED_RETRYABLE' | 'FAILED_FINAL' | 'CANCELLED';
 
 type QueueTask =
   | { type: 'dispatch_parse'; jobId: string }
   | { type: 'draft_copy'; jobId: string; instruction?: string }
+  | { type: 'draft_visuals'; jobId: string }
   | { type: 'revise_prompts'; jobId: string; instruction: string }
   | { type: 'generate_image'; jobId: string; pageNo: number; variant: 'a' | 'b'; nonce?: string }
   | { type: 'dispatch_render'; jobId: string }
@@ -23,7 +24,9 @@ interface Env {
   GITHUB_BRANCH: string;
   ALLOWED_CHAT_ID: string;
   TEXT_MODEL: string;
+  TEXT_FALLBACK_MODEL?: string;
   IMAGE_MODEL: string;
+  IMAGE_FALLBACK_MODEL?: string;
   VISION_MODEL: string;
   VISION_QA_MODE: string;
   IMAGE_WIDTH: string;
@@ -141,23 +144,64 @@ interface InlineButton { text: string; callback_data: string }
 
 const CTA_SUFFIX = '에 대한\n더 자세한 이야기와, 다른 다양한 주제에 대한 리포트는\nSRC_Plus 페이지( https://srcplus.vercel.app/ )에서\n무료로 만나보실 수 있습니다.';
 const IMAGE_POLICY_PHOTO = [
-  'Editorial stock photography aesthetic, natural and visually credible.',
-  'Realistic materials, plausible architecture, restrained color grading and natural light.',
-  'Unposed composition with one clear focal point, vertical 3:4.',
-  'Keep the lower portion calm and suitable for a dark text overlay.',
+  'Premium Getty Images-style editorial photography for a serious Korean real-estate, infrastructure and finance publication.',
+  'Translate the page claim into a specific asset, facility, workplace action or documentary scene; the image must not be a generic interchangeable business stock photo.',
+  'Photorealistic materials, physically plausible architecture, natural perspective, restrained contrast, low saturation and believable natural or workplace light.',
+  'Unposed documentary composition with one clear focal point, vertical 3:4 full bleed.',
+  'People are optional and never the subject. Three or more people may appear small within a wider indoor or outdoor space. One or two people are also acceptable when shown from behind, in profile at a distance, as small silhouettes or as distant workers, with no identifiable face; the facility, landscape or work setting must remain the focal point. Never use a face close-up, headshot or face-led composition.',
+  'Keep the lower 30 to 40 percent visually calm and slightly darker for a text overlay, integrated naturally into the scene rather than as a large empty black floor or blank slab.',
   'No readable text, letters, numbers, captions, labels, company logos, trademarks, brand marks, signage, product labels or watermarks.',
   'No recognizable company-specific storefront or corporate identity.',
-  'No impossible geometry, duplicated structures, glossy plastic render, extreme HDR, neon glow or cinematic fog.',
+  'No generic handshake, meaningless boardroom, decorative laptop, neon hologram, puzzle, scale, lightbulb or coin-pile cliché unless it is essential to the stated scene.',
+  'No impossible geometry, duplicated structures, glossy plastic render, extreme HDR, neon glow, game concept art or cinematic fog.',
+  'No sketch, drawing, illustration, anime, animation still, cartoon, painting, watercolor, vector art, CGI or 3D render.',
 ].join(' ');
 const IMAGE_POLICY_ILLUSTRATION = [
-  'Natural editorial illustration with restrained composition and subtle tactile texture.',
-  'Muted sophisticated colors, conceptually clear but not infographic-like, vertical 3:4.',
-  'Keep the lower portion calm and suitable for a dark text overlay.',
+  'Photographic editorial composite that could plausibly appear in a premium economics magazine, not a flat illustration or infographic.',
+  'Use a restrained visual metaphor only when a real documentary scene cannot explain the page claim. Preserve realistic materials, scale, perspective and light.',
+  'Muted sophisticated colors, one immediately understandable focal metaphor, vertical 3:4 full bleed.',
+  'People are optional and never the subject. Three or more people may appear small within a wider space. One or two people are acceptable only as distant rear views, side views or small silhouettes with no identifiable face; never use a face close-up, headshot or face-led composition.',
+  'Keep the lower 30 to 40 percent calm and slightly darker for a text overlay, integrated naturally into the photographed environment.',
   'No text, letters, numbers, captions, company logos, trademarks, signage or watermarks.',
-  'No glossy plastic 3D render, game concept art, neon gradients or corporate brand identity.',
+  'No glossy plastic 3D render, cartoon, game concept art, neon gradients, decorative symbols or corporate brand identity.',
+  'No sketch, drawing, anime, animation still, painting, watercolor or vector-art treatment; the result must remain convincingly photographic.',
 ].join(' ');
 
 function now(): string { return new Date().toISOString(); }
+function isAiQuotaError(message: string): boolean {
+  return /daily free allocation|free allocation of 10,000 neurons|무료 할당량|4006|3036/i.test(message);
+}
+function nextAiQuotaResetLabel(): string {
+  const current = new Date();
+  const reset = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), current.getUTCDate() + 1, 0, 0, 0));
+  return new Intl.DateTimeFormat('ko-KR', {
+    timeZone: 'Asia/Seoul', year: 'numeric', month: 'long', day: 'numeric', weekday: 'short', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  }).format(reset);
+}
+function userFacingAiError(message: string): string {
+  if (!isAiQuotaError(message)) return message;
+  return `Cloudflare Workers AI 무료 할당량(하루 10,000 Neurons)을 모두 사용했습니다. 무료 사용량은 매일 00:00 UTC, 한국시간 오전 9시에 초기화됩니다. 다음 실행 가능 시각: ${nextAiQuotaResetLabel()} (한국시간). 지금은 작업을 보존했으니 초기화 후 /jobs에서 상태를 확인하고 새 작업을 시작하세요.`;
+}
+async function runTextModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
+  try {
+    return await env.AI.run(env.TEXT_MODEL, input);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const fallback = env.TEXT_FALLBACK_MODEL?.trim();
+    if (!fallback || fallback === env.TEXT_MODEL || isAiQuotaError(reason)) throw error;
+    return env.AI.run(fallback, input);
+  }
+}
+async function runImageModel(env: Env, input: Record<string, unknown>): Promise<unknown> {
+  try {
+    return await env.AI.run(env.IMAGE_MODEL, input);
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error);
+    const fallback = env.IMAGE_FALLBACK_MODEL?.trim();
+    if (!fallback || fallback === env.IMAGE_MODEL || isAiQuotaError(reason)) throw error;
+    return env.AI.run(fallback, input);
+  }
+}
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
 }
@@ -218,6 +262,10 @@ async function sendMessage(env: Env, chatId: string, text: string, buttons?: Inl
 }
 async function sendLongMessage(env: Env, chatId: string, text: string): Promise<void> {
   for (const chunk of splitTelegram(text)) await sendMessage(env, chatId, chunk);
+}
+async function progress(env: Env, job: JobRow, status: JobStatus, message: string): Promise<void> {
+  await updateJob(env, job.id, { status, last_error: null });
+  await sendMessage(env, job.chat_id, `${message}\n작업: ${job.id}`);
 }
 async function sendPhoto(env: Env, chatId: string, bytes: Uint8Array, caption: string): Promise<void> {
   const form = new FormData();
@@ -406,6 +454,10 @@ function validateVisualPrompt(value: string): string {
   const prompt = clamp(value.trim(), 1300);
   if (!prompt) throw new Error('빈 이미지 프롬프트가 생성됐습니다.');
   if (/[가-힣]/.test(prompt)) throw new Error('이미지 프롬프트에 한국어가 포함됐습니다. 다시 생성합니다.');
+  if (prompt.split(/\s+/).length < 90) throw new Error('이미지 프롬프트가 촬영 장면을 구체화하기에 너무 짧습니다. 다시 생성합니다.');
+  if (/split[- ]screen|infographic|collage|montage|series of|(?:three|four|multiple) (?:photos|images|scenes)|(?:^|\W)(?:chart|graph)(?:\W|$)|text overlay|question mark|red flag|weighing scale|balance scale|stack of (?:cash|money)|counting (?:cash|money)|sketch|drawing|(?:^|\W)illustration(?:\W|$)|anime|animation|cartoon|painting|watercolor|vector art|3d render|(?:^|\W)cgi(?:\W|$)|face[- ]led|headshot|portrait(?:\W|$)|face close[- ]up|close[- ]up portrait|close[- ]up of (?:a|one|an) (?:person|man|woman|investor|professional|worker)/i.test(prompt)) throw new Error('이미지 프롬프트에 다중 장면·그래프·일러스트·인물 얼굴 중심 구도가 포함됐습니다. 사람은 공간을 설명하는 보조 요소로만 사용하고 실제 촬영 장면으로 다시 생성합니다.');
+  if (!/(?:camera|shot|view|angle|lens|depth of field)/i.test(prompt) || !/(?:light|lighting|daylight|dusk|dawn|overcast|sunset)/i.test(prompt)) throw new Error('이미지 프롬프트에 카메라 구도 또는 조명 지시가 빠졌습니다. 다시 생성합니다.');
+  if (!/(?:no readable text|without readable text)/i.test(prompt) || !/(?:no (?:company )?logos?|without (?:company )?logos?)/i.test(prompt)) throw new Error('이미지 프롬프트에 글자와 로고 금지 지시가 빠졌습니다. 다시 생성합니다.');
   return prompt;
 }
 function comparable(value: string): string {
@@ -422,6 +474,10 @@ function sentences(value: string): string[] {
 }
 function isPromotional(value: string): boolean {
   return /src[_ ]?plus|무료로|더 자세한 이야기|페이지에서/i.test(value);
+}
+function hasAiWritingCliche(value: string): boolean {
+  const compact = value.replace(/\s+/g, ' ').trim();
+  return /(?:아니다[.!?]\s*(?:진짜|정답|본질|핵심)은)|(?:(?<!뿐 )(?<!뿐)아니라\s+.{1,35}(?:이다|다)[.!?]?)|(?:핵심은)|(?:(?:중요한 것|중요한 점)(?:은|이)?\s*.{0,45}(?:라는 것이다|라는 점이다))|결국 우리가 주목해야 할 것은|단순히 .{1,35}(?:를|을) 넘어|이 질문에 대한 답은 명확하다|새로운 패러다임|게임\s*체인저|시장(?:의)? 열기|완충재|포트폴리오(?:의)? 온도|성장 엔진/i.test(compact);
 }
 function overlaps(left: string, right: string): boolean {
   return left.includes(right) || right.includes(left);
@@ -448,18 +504,20 @@ function normalizeDraft(raw: AiDraft): AiDraft {
     title: clamp(ensureKorean(String(raw.cover.title ?? ''), '표지 제목'), limits.cover_title_max_chars),
     subtitle: clamp(ensureKorean(String(raw.cover.subtitle ?? ''), '표지 부제'), limits.cover_subtitle_max_chars),
     visual_style: raw.cover.visual_style === 'illustration' ? 'illustration' as const : 'photo' as const,
-    visual_brief_ko: clamp(String(raw.cover.visual_brief_ko ?? '').trim(), 280),
+    visual_brief_ko: clamp(ensureKorean(String(raw.cover.visual_brief_ko ?? ''), '표지 이미지 설명'), 280),
     visual_prompt: validateVisualPrompt(String(raw.cover.visual_prompt ?? '')),
   };
   const bodyPages = raw.body_pages.map((page) => ({
     title: clamp(ensureKorean(String(page.title ?? ''), '본문 제목'), limits.body_title_max_chars),
     body: clamp(ensureKorean(String(page.body ?? ''), '본문'), limits.body_max_chars),
     visual_style: page.visual_style === 'illustration' ? 'illustration' as const : 'photo' as const,
-    visual_brief_ko: clamp(String(page.visual_brief_ko ?? '').trim(), 280),
+    visual_brief_ko: clamp(ensureKorean(String(page.visual_brief_ko ?? ''), '본문 이미지 설명'), 280),
     visual_prompt: validateVisualPrompt(String(page.visual_prompt ?? '')),
   }));
   if (!cover.title || !cover.subtitle || !cover.visual_brief_ko || bodyPages.some((p) => !p.title || !p.body || !p.visual_brief_ko)) throw new Error('AI가 빈 카드 필드를 반환했습니다.');
+  if (cover.visual_brief_ko.length < 35 || bodyPages.some((page) => page.visual_brief_ko.length < 35)) throw new Error('이미지 설명이 구체적인 장면을 검토하기에 너무 짧습니다. 다시 생성합니다.');
   if (cover.subtitle.length < limits.cover_subtitle_min_chars) throw new Error('표지 부제가 너무 짧습니다. 다시 생성합니다.');
+  if (hasAiWritingCliche(`${cover.title} ${cover.subtitle}`)) throw new Error('표지에 상투적인 AI 문체가 포함됐습니다. 구체적인 기사형 헤드라인으로 다시 생성합니다.');
   assertDifferent(cover.title, cover.subtitle, '표지 제목과 부제');
   const seenSentences: string[] = [];
   for (const [index, page] of bodyPages.entries()) {
@@ -469,6 +527,8 @@ function normalizeDraft(raw: AiDraft): AiDraft {
     assertDifferent(page.title, page.body, `본문 ${index + 1}의 제목과 내용`);
     assertDifferent(cover.title, page.title, `표지와 본문 ${index + 1} 제목`);
     if (isPromotional(page.body)) throw new Error(`본문 ${index + 1}에 홍보·CTA 문구가 포함됐습니다. 다시 생성합니다.`);
+    if (/(?:습니다|합니다|됩니다|입니다)[.!?]?/.test(`${page.title} ${page.body}`)) throw new Error(`본문 ${index + 1}이 존댓말 보고서 문체입니다. SRC Plus의 간결한 서술체로 다시 생성합니다.`);
+    if (hasAiWritingCliche(`${page.title} ${page.body}`)) throw new Error(`본문 ${index + 1}에 상투적인 AI 문체가 포함됐습니다. 사실과 인과관계를 직접 서술하도록 다시 생성합니다.`);
     if (sentences(page.body).some((sentence) => [comparable(cover.title), comparable(cover.subtitle)].some((coverText) => coverText.length >= 15 && overlaps(sentence, coverText)))) throw new Error(`본문 ${index + 1}이 표지 문구를 반복했습니다. 다시 생성합니다.`);
     for (const sentence of sentences(page.body)) {
       if (seenSentences.some((seen) => overlaps(sentence, seen))) throw new Error(`본문 ${index + 1}이 앞 페이지 문장을 반복했습니다. 다시 생성합니다.`);
@@ -476,8 +536,14 @@ function normalizeDraft(raw: AiDraft): AiDraft {
     }
   }
   if (new Set(bodyPages.map((page) => comparable(page.title))).size !== bodyPages.length) throw new Error('본문 제목이 서로 중복됐습니다. 다시 생성합니다.');
+  const visualPlans = [cover.visual_brief_ko, ...bodyPages.map((page) => page.visual_brief_ko)].map(comparable);
+  if (new Set(visualPlans).size !== visualPlans.length) throw new Error('표지와 본문의 이미지 장면이 서로 중복됐습니다. 페이지별 주장에 맞는 다른 장면으로 다시 생성합니다.');
+  const visualPrompts = [cover.visual_prompt, ...bodyPages.map((page) => page.visual_prompt)].map(comparable);
+  if (new Set(visualPrompts).size !== visualPrompts.length) throw new Error('표지와 본문의 이미지 프롬프트가 서로 중복됐습니다. 다시 생성합니다.');
+  if (bodyPages.filter((page) => page.title.includes('?')).length > 2) throw new Error('본문 제목이 질문형으로 반복됩니다. 관찰형·결론형 제목을 섞어 다시 생성합니다.');
+  if (bodyPages.filter((page) => /무엇(?:인가|일까)|이유는 무엇/.test(page.title)).length > 1) throw new Error("본문 제목에 '무엇인가' 형식이 반복됩니다. 다시 생성합니다.");
   const ctaSubject = clamp(ensureKorean(String(raw.cta_subject ?? '').replace(/에 대한$/, ''), '안내 문구 주제'), limits.cta_subject_max_chars);
-  if (/src[_ ]?plus|무료|만나보|리포트/i.test(ctaSubject)) throw new Error('CTA 주제에 홍보 문구가 포함됐습니다. 다시 생성합니다.');
+  if (/src[_ ]?plus|무료|만나보|리포트|알아보|시작|계속|클릭/i.test(ctaSubject)) throw new Error('CTA 주제에 홍보·행동 유도 문구가 포함됐습니다. 명사구로 다시 생성합니다.');
   return {
     report_title: clamp(String(raw.report_title ?? cover.title).trim(), 120),
     category: ['insights', 'issues', 'sectors'].includes(raw.category) ? raw.category : 'issues',
@@ -503,11 +569,23 @@ function mergeCopy(raw: AiDraft, copy: AiCopyDraft): AiDraft {
     body_pages: copy.body_pages.map((page, index) => ({ ...raw.body_pages[index], ...page })),
   };
 }
+function copyDraftWithPlaceholders(raw: AiCopyDraft): AiDraft {
+  const placeholder = 'Documentary editorial scene with a specific physical asset and realistic materials, photographed in a real location. Wide composition, natural perspective, clear foreground, middle ground and background, restrained color grading, believable daylight, calm darker lower area for copy, no readable text, numbers, logos, signage or watermark.';
+  const cover = raw.cover ?? { title: '', subtitle: '' };
+  const bodyPages = Array.isArray(raw.body_pages) ? raw.body_pages : [];
+  return {
+    report_title: String(raw.report_title ?? cover.title ?? ''),
+    category: ['insights', 'issues', 'sectors'].includes(raw.category) ? raw.category : 'issues',
+    cover: { title: String(cover.title ?? ''), subtitle: String(cover.subtitle ?? ''), visual_style: 'photo', visual_brief_ko: '이미지 계획을 다음 단계에서 작성한다.', visual_prompt: placeholder },
+    body_pages: bodyPages.map((page, index) => ({ title: String(page?.title ?? ''), body: String(page?.body ?? ''), visual_style: 'photo' as const, visual_brief_ko: `본문 ${index + 1} 이미지 계획을 다음 단계에서 작성한다.`, visual_prompt: `${placeholder} Scene ${index + 1}.` })),
+    cta_subject: String(raw.cta_subject ?? cover.title ?? ''),
+  };
+}
 async function repairDraftCopy(env: Env, source: unknown, raw: AiDraft, error: string): Promise<AiDraft> {
-  const result = await env.AI.run(env.TEXT_MODEL, {
+  const result = await runTextModel(env, {
     messages: [
-      { role: 'system', content: `SRC Plus 카드뉴스 문구 교정자다. 이미지 계획은 다루지 않는다. 다음 중앙 편집 규칙을 반드시 적용한다.\n${JSON.stringify(editorialRules)}` },
-      { role: 'user', content: `검증 오류: ${error}\n\n교정할 문구: ${JSON.stringify(copyFields(raw))}\n\n원문 근거: ${clamp(JSON.stringify(source), 18000)}\n\n본문 페이지 수를 유지하고 오류와 모든 중복을 고쳐라.` },
+      { role: 'system', content: `SRC Plus 카드뉴스 문구 교정자다. 이미지 계획은 다루지 않는다. 다음 중앙 편집 규칙을 반드시 적용한다.\n본문은 페이지마다 ${editorialRules.limits.body_sentences_min}~${editorialRules.limits.body_sentences_max}문장으로 맞춘다. 문체는 건조한 기사체(~다/~한다/~있다)로 통일하고 습니다/합니다/됩니다/입니다, 홍보 문구, AI 상투어를 금지한다. 제목과 본문, 표지와 본문, 페이지 사이의 중복을 제거한다. 페이지 수와 원문 근거는 유지한다.\n${JSON.stringify(editorialRules)}` },
+      { role: 'user', content: `검증 오류: ${error}\n\n교정할 문구: ${JSON.stringify(copyFields(raw))}\n\n원문 근거: ${clamp(JSON.stringify(source), 18000)}\n\n검증 오류가 난 부분만 고치되 전체 문안을 다시 검증하고, 반드시 JSON 스키마에 맞는 완성본 하나만 반환하라.` },
     ],
     temperature: 0.1,
     max_tokens: 2400,
@@ -516,35 +594,168 @@ async function repairDraftCopy(env: Env, source: unknown, raw: AiDraft, error: s
   if (!result.response) throw new Error('문구 자동 교정 응답이 비어 있습니다.');
   return mergeCopy(raw, result.response);
 }
+function normalizeCopyDraft(raw: AiCopyDraft): AiDraft {
+  const { limits, structure } = editorialRules;
+  if (!raw?.cover || !Array.isArray(raw.body_pages) || raw.body_pages.length < structure.body_pages_min || raw.body_pages.length > structure.body_pages_max) throw new Error('AI 카드 문구 구조가 유효하지 않습니다.');
+  const cover = {
+    title: clamp(ensureKorean(String(raw.cover.title ?? ''), '표지 제목'), limits.cover_title_max_chars),
+    subtitle: clamp(ensureKorean(String(raw.cover.subtitle ?? ''), '표지 부제'), limits.cover_subtitle_max_chars),
+  };
+  if (cover.subtitle.length < limits.cover_subtitle_min_chars) throw new Error('표지 부제가 너무 짧습니다. 다시 생성합니다.');
+  if (hasAiWritingCliche(`${cover.title} ${cover.subtitle}`)) throw new Error('표지에 상투적인 AI 문체가 포함됐습니다.');
+  assertDifferent(cover.title, cover.subtitle, '표지 제목과 부제');
+  const bodyPages = raw.body_pages.map((page) => ({
+    title: clamp(ensureKorean(String(page.title ?? ''), '본문 제목'), limits.body_title_max_chars),
+    body: clamp(ensureKorean(String(page.body ?? ''), '본문'), limits.body_max_chars),
+  }));
+  const seenSentences: string[] = [];
+  for (const [index, page] of bodyPages.entries()) {
+    if (page.title.length < limits.body_title_min_chars || page.body.length < limits.body_min_chars) throw new Error(`본문 ${index + 1}의 정보량이 카드 규격에 맞지 않습니다.`);
+    const count = sentenceCount(page.body);
+    if (count < limits.body_sentences_min || count > limits.body_sentences_max) throw new Error(`본문 ${index + 1}의 문장 수가 기준에 맞지 않습니다.`);
+    assertDifferent(page.title, page.body, `본문 ${index + 1}의 제목과 내용`);
+    assertDifferent(cover.title, page.title, `표지와 본문 ${index + 1} 제목`);
+    if (isPromotional(page.body) || /(?:습니다|합니다|됩니다|입니다)[.!?]?/.test(`${page.title} ${page.body}`) || hasAiWritingCliche(`${page.title} ${page.body}`)) throw new Error(`본문 ${index + 1} 문체가 중앙 규칙에 맞지 않습니다.`);
+    for (const sentence of sentences(page.body)) {
+      if (seenSentences.some((seen) => overlaps(sentence, seen))) throw new Error(`본문 ${index + 1}이 앞 페이지 문장을 반복했습니다.`);
+      seenSentences.push(sentence);
+    }
+  }
+  if (new Set(bodyPages.map((page) => comparable(page.title))).size !== bodyPages.length) throw new Error('본문 제목이 서로 중복됐습니다.');
+  const ctaSubject = clamp(ensureKorean(String(raw.cta_subject ?? '').replace(/에 대한$/, ''), '안내 문구 주제'), limits.cta_subject_max_chars);
+  if (/src[_ ]?plus|무료|만나보|리포트|알아보|시작|계속|클릭/i.test(ctaSubject)) throw new Error('CTA 주제가 행동 유도 문구입니다.');
+  return copyDraftWithPlaceholders({
+    report_title: clamp(String(raw.report_title ?? cover.title).trim(), 120),
+    category: ['insights', 'issues', 'sectors'].includes(raw.category) ? raw.category : 'issues',
+    cover,
+    body_pages: bodyPages,
+    cta_subject: ctaSubject,
+  });
+}
+async function repairDraftVisuals(env: Env, source: unknown, raw: AiDraft, error: string): Promise<AiDraft> {
+  const pageCount = raw.body_pages.length + 1;
+  const schema = {
+    type: 'object', properties: { pages: { type: 'array', minItems: pageCount, maxItems: pageCount, items: {
+      type: 'object', properties: {
+        page_no: { type: 'integer' }, visual_style: { type: 'string', enum: ['photo', 'illustration'] },
+        visual_brief_ko: { type: 'string', minLength: 40 }, visual_prompt: { type: 'string', minLength: 300 },
+      }, required: ['page_no', 'visual_style', 'visual_brief_ko', 'visual_prompt'],
+    } } }, required: ['pages'],
+  };
+  const currentPages = [
+    { page_no: 1, title: raw.cover.title, body: raw.cover.subtitle, visual_style: raw.cover.visual_style, visual_brief_ko: raw.cover.visual_brief_ko, visual_prompt: raw.cover.visual_prompt },
+    ...raw.body_pages.map((page, index) => ({ page_no: index + 2, title: page.title, body: page.body, visual_style: page.visual_style, visual_brief_ko: page.visual_brief_ko, visual_prompt: page.visual_prompt })),
+  ];
+  const result = await runTextModel(env, {
+    messages: [
+      { role: 'system', content: `SRC Plus 카드뉴스 비주얼 디렉터다. 문안은 바꾸지 않는다. 다음 중앙 비주얼 규칙을 빠짐없이 적용한다.\n${JSON.stringify(editorialRules.visual_direction)}` },
+      { role: 'user', content: `검증 오류: ${error}\n원문 JSON: ${clamp(JSON.stringify(source), 32000)}\n현재 페이지: ${JSON.stringify(currentPages)}\n각 페이지마다 먼저 요약문의 한 가지 주장과 이를 뒷받침하는 원문 대목을 대조하고, 그 대목에 실제로 등장하는 자산·시설·장소·업무 행동 가운데 가장 구체적인 피사체 하나를 고른다. 원문에 없는 비유 소품을 만들지 않는다. 모든 페이지를 하나의 Getty Images풍 경제지 사진 시리즈로 다시 설계하라. 사람은 가능하면 넣지 않는다. 3명 이상은 넓은 공간에 작게 배치할 수 있고, 1~2명도 뒷모습·옆모습·원거리 작업자·작은 실루엣이면 허용하지만 얼굴과 개별 신원이 보이지 않아야 한다. 실내는 공간 구조와 작업 맥락을, 실외는 시설과 사람의 스케일 관계를 우선한다. 얼굴 클로즈업·헤드샷·인물 감정 중심 구도는 금지한다. visual_brief_ko는 선택한 피사체와 선택 근거가 드러나는 구체적인 한국어 2~3문장이다. visual_prompt는 90단어 이상의 영어 촬영 지시서이며 단일 장면, 피사체 행동, 장소, 카메라·렌즈·각도, 조명, 색보정, 하단 30~40% 안전 영역, 글자·숫자·로고·간판 금지를 모두 포함한다. 여백은 검은 바닥이나 빈 판처럼 보이지 않고 장면에 자연스럽게 이어져야 한다. 스케치·그림·애니메이션·카툰·회화·벡터·CGI·3D 렌더는 사용하지 않는다.` },
+    ],
+    temperature: 0.1, max_tokens: 3600, response_format: { type: 'json_schema', json_schema: schema },
+  }) as { response?: { pages: Array<{ page_no: number; visual_style: 'photo' | 'illustration'; visual_brief_ko: string; visual_prompt: string }> } };
+  if (!result.response?.pages || result.response.pages.length !== pageCount) throw new Error('이미지 계획 자동 교정 결과가 유효하지 않습니다.');
+  const byPage = new Map(result.response.pages.map((page) => [page.page_no, page]));
+  const coverVisual = byPage.get(1);
+  if (!coverVisual) throw new Error('표지 이미지 계획 자동 교정 결과가 없습니다.');
+  return {
+    ...raw,
+    cover: { ...raw.cover, visual_style: coverVisual.visual_style, visual_brief_ko: coverVisual.visual_brief_ko, visual_prompt: coverVisual.visual_prompt },
+    body_pages: raw.body_pages.map((page, index) => {
+      const visual = byPage.get(index + 2);
+      if (!visual) throw new Error(`본문 ${index + 1} 이미지 계획 자동 교정 결과가 없습니다.`);
+      return { ...page, visual_style: visual.visual_style, visual_brief_ko: visual.visual_brief_ko, visual_prompt: visual.visual_prompt };
+    }),
+  };
+}
+async function createVisualPlan(env: Env, source: unknown, draft: AiDraft): Promise<AiDraft> {
+  const pageCount = draft.body_pages.length + 1;
+  const schema = {
+    type: 'object', properties: { pages: { type: 'array', minItems: pageCount, maxItems: pageCount, items: {
+      type: 'object', properties: {
+        page_no: { type: 'integer' }, visual_style: { type: 'string', enum: ['photo', 'illustration'] },
+        visual_brief_ko: { type: 'string', minLength: 40 }, visual_prompt: { type: 'string', minLength: 650 },
+      }, required: ['page_no', 'visual_style', 'visual_brief_ko', 'visual_prompt'],
+    } } }, required: ['pages'],
+  };
+  const copy = [
+    { page_no: 1, title: draft.cover.title, body: draft.cover.subtitle },
+    ...draft.body_pages.map((page, index) => ({ page_no: index + 2, title: page.title, body: page.body })),
+  ];
+  const result = await runTextModel(env, {
+    messages: [
+      { role: 'system', content: 'SRC Plus 카드뉴스의 이미지 계획만 작성한다. 문구는 절대 바꾸지 않는다. 중앙 비주얼 규칙을 적용한다.\n' + JSON.stringify(editorialRules.visual_direction) },
+      { role: 'user', content: '원문 JSON:\n' + clamp(JSON.stringify(source), 32000) + '\n\n확정 문안:\n' + JSON.stringify(copy) + '\n\n페이지마다 단 하나의 구체적인 피사체와 단일 촬영 장면을 정한다. visual_prompt는 반드시 110~150개의 영어 단어로 작성하고 다음 10개 요소를 각각 포함한다: subject, visible state or action, exact place type, foreground/midground/background, camera distance, camera angle, lens, time and lighting, color grading, lower 30~40% text-safe area. 마지막에는 반드시 "No readable text, numbers, logos, signage or watermark."를 포함한다. "a photo of", "business image", "important", "concept", "a graph" 같은 추상 주제어만 쓰지 않는다. 장면을 설명하는 고유 명사와 물리적 디테일을 최소 6개 넣는다. 짧은 한두 문장 프롬프트를 절대 출력하지 않는다.' },
+    ],
+    temperature: 0.1, max_tokens: 5200, response_format: { type: 'json_schema', json_schema: schema },
+  }) as { response?: { pages: Array<{ page_no: number; visual_style: 'photo' | 'illustration'; visual_brief_ko: string; visual_prompt: string }> } };
+  const buildVisualDraft = (response: { pages: Array<{ page_no: number; visual_style: 'photo' | 'illustration'; visual_brief_ko: string; visual_prompt: string }> }): AiDraft => {
+    if (!response?.pages || response.pages.length !== pageCount) throw new Error('이미지 계획 응답이 유효하지 않습니다.');
+    const byPage = new Map(response.pages.map((page) => [page.page_no, page]));
+    const coverVisual = byPage.get(1);
+    if (!coverVisual) throw new Error('표지 이미지 계획이 없습니다.');
+    return {
+      ...draft,
+      cover: { ...draft.cover, visual_style: coverVisual.visual_style, visual_brief_ko: coverVisual.visual_brief_ko, visual_prompt: coverVisual.visual_prompt },
+      body_pages: draft.body_pages.map((page, index) => {
+        const visual = byPage.get(index + 2); if (!visual) throw new Error('본문 ' + (index + 1) + ' 이미지 계획이 없습니다.');
+        return { ...page, visual_style: visual.visual_style, visual_brief_ko: visual.visual_brief_ko, visual_prompt: visual.visual_prompt };
+      }),
+    };
+  };
+  let candidate: AiDraft;
+  try {
+    candidate = buildVisualDraft(result.response as { pages: Array<{ page_no: number; visual_style: 'photo' | 'illustration'; visual_brief_ko: string; visual_prompt: string }> });
+  } catch (error) {
+    candidate = draft;
+  }
+  let lastError = '이미지 계획 검증 실패';
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const normalizeVisual = (visual: { visual_style: 'photo' | 'illustration'; visual_brief_ko: string; visual_prompt: string }) => ({
+        visual_style: visual.visual_style, visual_brief_ko: visual.visual_brief_ko, visual_prompt: validateVisualPrompt(visual.visual_prompt),
+      });
+      return {
+        ...candidate,
+        cover: { ...candidate.cover, ...normalizeVisual(candidate.cover) },
+        body_pages: candidate.body_pages.map((page) => ({ ...page, ...normalizeVisual(page) })),
+      };
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error);
+      if (attempt === 3) break;
+      candidate = await repairDraftVisuals(env, source, candidate, lastError);
+    }
+  }
+  throw new Error(`이미지 프롬프트 자동 교정 실패: ${lastError}`);
+}
 async function createDraft(env: Env, source: unknown, previous: PageRow[], instruction?: string): Promise<AiDraft> {
   const system = `당신은 SRC Plus의 한국어 인스타그램 카드뉴스 편집자다.
 다음 중앙 편집 규칙 JSON을 최초 생성, 수정, 전체 재생성에 예외 없이 적용한다.
 examples.patterns의 중괄호를 원문 내용으로 바꿔 구조와 톤만 참고한다. 패턴 문구나 중괄호를 출력하지 않고 examples.bad의 패턴은 만들지 않는다.
 ${JSON.stringify(editorialRules, null, 2)}
+이번 호출은 문안 전용 1단계다. cover와 body_pages에는 title과 body만 작성하고 visual_style, visual_brief_ko, visual_prompt는 출력하지 않는다. 이미지 계획은 문안 승인 뒤 별도 호출에서 작성한다.
 visual_brief_ko는 사용자가 검토할 한국어 이미지 설명이다.
-visual_prompt는 이미지 모델용 영어만 사용한다. 특정 기업명·브랜드명·로고·간판·제품명을 넣지 말고, 기업 사례는 일반적인 산업·공간 장면으로 바꾼다.
-실제 장면이 자연스러우면 photo를 우선하고, 개념 관계를 사진으로 표현하기 어려울 때만 illustration을 사용한다.
-이미지 안에 글자, 숫자, 로고, 워터마크, 간판이 없어야 하며 아래쪽은 카드 텍스트를 놓기 쉬운 단순한 구도로 둔다.`;
+이번 호출에서는 이미지 필드를 만들지 않는다. 이미지 계획은 문안 승인 뒤 별도의 호출에서 작성한다.`;
   const baseUser = `구조화된 리포트 JSON:\n${clamp(JSON.stringify(source), 42000)}\n\n현재 초안:\n${previous.length ? clamp(JSON.stringify(previous.map((p) => ({ page_no: p.page_no, page_kind: p.page_kind, title: p.title, body: p.body, visual_style: p.visual_style, visual_brief_ko: p.visual_brief_ko, visual_prompt: p.visual_prompt }))), 18000) : '없음'}\n\n수정 지시:\n${instruction ?? '새 카드뉴스 초안을 작성하라.'}`;
-  const result = await env.AI.run(env.TEXT_MODEL, {
+  const result = await runTextModel(env, {
     messages: [{ role: 'system', content: system }, { role: 'user', content: baseUser }],
     temperature: 0.2,
-    max_tokens: 4000,
-    response_format: { type: 'json_schema', json_schema: draftSchema() },
-  }) as { response?: AiDraft };
+    max_tokens: 5000,
+    response_format: { type: 'json_schema', json_schema: copyDraftSchema(editorialRules.structure.body_pages_preferred ?? editorialRules.structure.body_pages_min) },
+  }) as { response?: AiCopyDraft };
   if (!result.response) throw new Error('Workers AI가 구조화 응답을 반환하지 않았습니다.');
-  let candidate = sanitizeDraft(result.response);
-  let lastError = 'Workers AI가 유효한 카드뉴스를 반환하지 않았습니다.';
+  let candidate = result.response;
+  let lastError = '문안 검증 실패';
   for (let attempt = 1; attempt <= 3; attempt += 1) {
     try {
-      return normalizeDraft(candidate);
+      return normalizeCopyDraft(candidate);
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error);
-      if (lastError.includes('이미지')) throw error;
-      candidate = sanitizeDraft(await repairDraftCopy(env, source, candidate, lastError));
+      if (attempt === 3) break;
+      const repaired = await repairDraftCopy(env, source, copyDraftWithPlaceholders(candidate), lastError);
+      candidate = copyFields(repaired);
     }
   }
-  throw new Error(`AI 초안 자동 교정 실패: ${lastError}`);
+  throw new Error(`AI 문안 자동 교정 실패: ${lastError}`);
 }
 async function replacePages(env: Env, jobId: string, draft: AiDraft): Promise<void> {
   const pages: Array<Omit<PageRow, 'job_id' | 'image_a_key' | 'image_b_key' | 'selected_key' | 'qa_a_json' | 'qa_b_json' | 'status'>> = [];
@@ -559,17 +770,17 @@ async function replacePages(env: Env, jobId: string, draft: AiDraft): Promise<vo
   const job = await getJob(env, jobId);
   await updateJob(env, jobId, { report_title: draft.report_title, report_category: draft.category, page_count: pages.length, status: 'COPY_DRAFTED', copy_version: (job?.copy_version ?? 0) + 1 });
 }
-async function revisePrompts(env: Env, pages: PageRow[], instruction: string): Promise<void> {
+async function revisePrompts(env: Env, source: unknown, pages: PageRow[], instruction: string): Promise<void> {
   const targets = pages.filter((p) => p.image_required);
   const schema = {
     type: 'object', properties: { pages: { type: 'array', minItems: targets.length, maxItems: targets.length, items: {
       type: 'object', properties: { page_no: { type: 'integer' }, visual_style: { type: 'string', enum: ['photo', 'illustration'] }, visual_brief_ko: { type: 'string' }, visual_prompt: { type: 'string' } }, required: ['page_no', 'visual_style', 'visual_brief_ko', 'visual_prompt'],
     } } }, required: ['pages'],
   };
-  const result = await env.AI.run(env.TEXT_MODEL, {
+  const result = await runTextModel(env, {
     messages: [
-      { role: 'system', content: '이미지 계획만 수정한다. visual_brief_ko는 한국어, visual_prompt는 영어다. 특정 기업명과 브랜드를 일반적인 산업 장면으로 바꾸고 이미지 내부 글자·숫자·로고·간판·워터마크를 금지한다.' },
-      { role: 'user', content: `현재 페이지: ${JSON.stringify(targets.map((p) => ({ page_no: p.page_no, title: p.title, body: p.body, visual_style: p.visual_style, visual_brief_ko: p.visual_brief_ko, visual_prompt: p.visual_prompt })))}\n수정 지시: ${instruction}` },
+      { role: 'system', content: `이미지 계획만 수정한다. 다음 중앙 비주얼 규칙을 빠짐없이 적용한다. ${JSON.stringify(editorialRules.visual_direction)} visual_brief_ko는 한국어, visual_prompt는 영어다. 각 페이지의 한 가지 주장과 이를 뒷받침하는 원문 대목을 대조한 뒤, 원문에 등장하는 자산·시설·장소·업무 행동 중 가장 구체적인 피사체 하나를 선택한다. 사람은 가능하면 제외하고, 3명 이상은 넓은 공간에 작게 배치하며 1~2명은 뒷모습·옆모습·원거리 작업자·작은 실루엣일 때만 허용한다. 얼굴·표정·개별 신원과 인물 감정이 초점이 되면 안 된다. 실내는 공간 구조와 작업 맥락을, 실외는 시설·지형과 사람의 스케일 관계를 우선한다. 원문에 없는 비유 소품을 만들지 않는다. 구체적인 Getty Images풍 단일 에디토리얼 장면으로 설계한다. photo가 기본이며 실제 장면으로 설명할 수 없을 때만 사실적인 사진 기반 합성을 사용한다. 스케치·그림·애니메이션·카툰·회화·벡터·CGI·3D 렌더는 금지한다. 특정 기업명과 브랜드는 관련 산업·자산·사용 맥락으로 바꾸고 이미지 내부 글자·숫자·로고·간판·워터마크를 금지한다.` },
+      { role: 'user', content: `원문 JSON: ${clamp(JSON.stringify(source), 32000)}\n현재 페이지: ${JSON.stringify(targets.map((p) => ({ page_no: p.page_no, title: p.title, body: p.body, visual_style: p.visual_style, visual_brief_ko: p.visual_brief_ko, visual_prompt: p.visual_prompt })))}\n수정 지시: ${instruction}` },
     ],
     temperature: 0.2, max_tokens: 2600, response_format: { type: 'json_schema', json_schema: schema },
   }) as { response?: { pages: Array<{ page_no: number; visual_style: string; visual_brief_ko: string; visual_prompt: string }> } };
@@ -582,25 +793,27 @@ async function generateImage(env: Env, page: PageRow, seed: number): Promise<Uin
   const policy = page.visual_style === 'illustration' ? IMAGE_POLICY_ILLUSTRATION : IMAGE_POLICY_PHOTO;
   const form = new FormData();
   form.append('prompt', `${policy} Subject and scene: ${page.visual_prompt}`);
-  form.append('width', env.IMAGE_WIDTH || '768');
-  form.append('height', env.IMAGE_HEIGHT || '1024');
+  form.append('width', env.IMAGE_WIDTH || '960');
+  form.append('height', env.IMAGE_HEIGHT || '1280');
   form.append('guidance', '4');
   form.append('seed', String(seed));
   const serialized = new Response(form);
-  const result = await env.AI.run(env.IMAGE_MODEL, { multipart: { body: serialized.body, contentType: serialized.headers.get('content-type') } }) as { image?: string };
+  const result = await runImageModel(env, { multipart: { body: serialized.body, contentType: serialized.headers.get('content-type') } }) as { image?: string };
   if (!result.image) throw new Error('이미지 모델이 이미지를 반환하지 않았습니다.');
   return base64ToBytes(result.image);
 }
-async function assessImage(env: Env, image: Uint8Array): Promise<Record<string, unknown>> {
+async function assessImage(env: Env, page: PageRow, image: Uint8Array): Promise<Record<string, unknown>> {
   if ((env.VISION_QA_MODE || 'off') === 'off') return { mode: 'off' };
   const schema = { type: 'object', properties: {
-    has_readable_text: { type: 'boolean' }, has_logo_or_brand: { type: 'boolean' }, has_watermark: { type: 'boolean' }, obvious_ai_artifacts: { type: 'boolean' }, composition_fit: { type: 'boolean' }, notes_ko: { type: 'string' },
-  }, required: ['has_readable_text', 'has_logo_or_brand', 'has_watermark', 'obvious_ai_artifacts', 'composition_fit', 'notes_ko'] };
+    has_readable_text: { type: 'boolean' }, has_logo_or_brand: { type: 'boolean' }, has_watermark: { type: 'boolean' }, obvious_ai_artifacts: { type: 'boolean' }, composition_fit: { type: 'boolean' }, people_face_focus: { type: 'boolean' }, people_role_fit: { type: 'boolean' }, space_type_fit: { type: 'boolean' },
+    semantic_fit_score: { type: 'integer', minimum: 1, maximum: 5 }, editorial_tone_score: { type: 'integer', minimum: 1, maximum: 5 }, realism_score: { type: 'integer', minimum: 1, maximum: 5 }, notes_ko: { type: 'string' },
+  }, required: ['has_readable_text', 'has_logo_or_brand', 'has_watermark', 'obvious_ai_artifacts', 'composition_fit', 'people_face_focus', 'people_role_fit', 'space_type_fit', 'semantic_fit_score', 'editorial_tone_score', 'realism_score', 'notes_ko'] };
   try {
     const result = await env.AI.run(env.VISION_MODEL, {
       messages: [
-        { role: 'system', content: '카드뉴스 배경 이미지 QA다. 실제로 보이는 요소만 판단하고 한국어로 짧게 메모한다.' },
-        { role: 'user', content: '이미지에 읽을 수 있는 글자·숫자·간판, 기업 로고·브랜드, 워터마크, 명백한 AI 왜곡이 있는지와 3:4 카드 하단 텍스트 오버레이에 적합한지 검사하라.' },
+        { role: 'system', content: 'SRC Plus 카드뉴스의 비주얼 디렉터다. 실제로 보이는 요소만 판단하고 한국어로 짧고 구체적으로 메모한다.' },
+        { role: 'user', content: `페이지 제목: ${page.title}\n페이지 본문: ${page.body}\n의도한 이미지: ${page.visual_brief_ko}\n이 이미지가 페이지 주장과 직접 연결되는지, 프리미엄 경제지·Getty Images풍 에디토리얼 톤인지, 실제 사진 또는 사실적인 사진 기반 합성으로 그럴듯한지 각각 1~5점으로 평가하라. 장면의 시설 규모와 사람의 행동이 현업에서 실제로 있을 법한지도 현실감 점수에 반영한다. 읽을 수 있는 글자·숫자·간판뿐 아니라 화살표, X 표시, 신호 아이콘, 차선 기호처럼 의미를 가진 인공 그래픽도 발견하면 실패로 표시한다. 기업 로고·브랜드, 워터마크, 명백한 AI 왜곡과 3:4 카드 하단 30~40% 텍스트 안전 영역도 검사하라. 안전 영역이 빈 검은 바닥이나 판처럼 부자연스럽게 보이는지도 확인하라.` },
+        { role: 'user', content: '추가 시각 QA: 사람이 보이면 people_face_focus는 얼굴이나 표정이 화면의 주제가 될 때만 true. people_role_fit은 인물이 공간의 규모·작업 맥락을 보조하면 true이며, 1~2명도 뒷모습·옆모습·원거리·작은 실루엣이면 허용한다. space_type_fit은 실내라면 천장·창·작업대·시설 구조가, 실외라면 지형·도로·수면·구조물과 인물의 스케일 관계가 주제와 맞는지 평가한다. 얼굴 클로즈업, 헤드샷, 감정 중심 인물은 실패다.' },
       ],
       image: `data:image/png;base64,${bytesToBase64(image)}`,
       max_tokens: 400,
@@ -623,7 +836,14 @@ function qaCaption(jsonText: string | null): string {
     if (qa.has_watermark) flags.push('워터마크 의심');
     if (qa.obvious_ai_artifacts) flags.push('AI 왜곡 의심');
     if (qa.composition_fit === false) flags.push('텍스트 영역 부족');
-    return flags.length ? `주의: ${flags.join(', ')} · ${String(qa.notes_ko ?? '')}` : `자동 QA 양호 · ${String(qa.notes_ko ?? '')}`;
+    if (qa.people_face_focus) flags.push('인물 얼굴 중심');
+    if (qa.people_role_fit === false) flags.push('인물 역할 부적합');
+    if (qa.space_type_fit === false) flags.push('실내·실외 공간 부적합');
+    if (Number(qa.semantic_fit_score ?? 0) < 4) flags.push('문맥 적합성 재검토');
+    if (Number(qa.editorial_tone_score ?? 0) < 4) flags.push('에디토리얼 톤 재검토');
+    if (Number(qa.realism_score ?? 0) < 4) flags.push('현실감 재검토');
+    const scores = `문맥 ${String(qa.semantic_fit_score ?? '-')} · 톤 ${String(qa.editorial_tone_score ?? '-')} · 현실감 ${String(qa.realism_score ?? '-')}`;
+    return flags.length ? `주의: ${flags.join(', ')} · ${scores} · ${String(qa.notes_ko ?? '')}` : `자동 QA · ${scores} · ${String(qa.notes_ko ?? '')}`;
   } catch { return '자동 QA 결과 해석 실패'; }
 }
 
@@ -720,6 +940,7 @@ async function processTask(env: Env, task: QueueTask): Promise<void> {
   }
   if (task.type === 'draft_copy') {
     await updateJob(env, job.id, { status: 'COPY_DRAFTING', last_error: null });
+    await sendMessage(env, job.chat_id, `원문을 읽고 문안만 작성합니다.\n작업: ${job.id}`);
     const sourceObject = await env.ASSETS.get(job.source_key ?? `jobs/${job.id}/source.json`);
     if (!sourceObject) throw new Error('파싱된 원문 JSON을 찾지 못했습니다.');
     const source = JSON.parse(new TextDecoder().decode(await sourceObject.arrayBuffer())) as unknown;
@@ -728,8 +949,40 @@ async function processTask(env: Env, task: QueueTask): Promise<void> {
     await sendCopyReview(env, (await getJob(env, job.id)) as JobRow);
     return;
   }
+  if (task.type === 'draft_visuals') {
+    const sourceObject = await env.ASSETS.get(job.source_key ?? `jobs/${job.id}/source.json`);
+    if (!sourceObject) throw new Error('파싱된 원문 JSON을 찾지 못했습니다.');
+    const source = JSON.parse(new TextDecoder().decode(await sourceObject.arrayBuffer())) as unknown;
+    const pages = await getPages(env, job.id);
+    const cover = pages.find((page) => page.page_kind === 'cover');
+    const body = pages.filter((page) => page.page_kind === 'body');
+    if (!cover) throw new Error('표지 문안을 찾지 못했습니다.');
+    const draft: AiDraft = {
+      report_title: job.report_title ?? cover.title, category: (job.report_category as AiDraft['category']) ?? 'issues',
+      cover: { title: cover.title, subtitle: cover.body, visual_style: cover.visual_style, visual_brief_ko: cover.visual_brief_ko, visual_prompt: cover.visual_prompt },
+      body_pages: body.map((page) => ({ title: page.title, body: page.body, visual_style: page.visual_style, visual_brief_ko: page.visual_brief_ko, visual_prompt: page.visual_prompt })),
+      cta_subject: pages.find((page) => page.page_kind === 'cta')?.title ?? cover.title,
+    };
+    await progress(env, job, 'PROMPT_DRAFTING', '문안 승인 확인. 이미지 계획을 작성합니다.');
+    let visualDraft: AiDraft;
+    try {
+      visualDraft = await createVisualPlan(env, source, draft);
+    } catch (error) {
+      const reason = error instanceof Error ? error.message : String(error);
+      await updateJob(env, job.id, { status: 'FAILED_RETRYABLE', last_error: reason });
+      await sendMessage(env, job.chat_id, `이미지 계획을 만들지 못했습니다. 문안은 보존되어 있습니다.\n${userFacingAiError(reason)}\n작업: ${job.id}`);
+      return;
+    }
+    await replacePages(env, job.id, visualDraft);
+    await updateJob(env, job.id, { status: 'PROMPT_DRAFTED' });
+    await sendPromptReview(env, (await getJob(env, job.id)) as JobRow);
+    return;
+  }
   if (task.type === 'revise_prompts') {
-    await revisePrompts(env, await getPages(env, job.id), task.instruction);
+    const sourceObject = await env.ASSETS.get(job.source_key ?? `jobs/${job.id}/source.json`);
+    if (!sourceObject) throw new Error('파싱된 원문 JSON을 찾지 못했습니다.');
+    const source = JSON.parse(new TextDecoder().decode(await sourceObject.arrayBuffer())) as unknown;
+    await revisePrompts(env, source, await getPages(env, job.id), task.instruction);
     await sendPromptReview(env, (await getJob(env, job.id)) as JobRow);
     return;
   }
@@ -737,7 +990,7 @@ async function processTask(env: Env, task: QueueTask): Promise<void> {
     const page = await env.DB.prepare('SELECT * FROM pages WHERE job_id=? AND page_no=?').bind(job.id, task.pageNo).first<PageRow>();
     if (!page || !page.image_required) throw new Error('이미지 생성 대상 페이지가 아닙니다.');
     const bytes = await generateImage(env, page, seedFor(job.id, page.page_no, task.variant, task.nonce));
-    const qa = await assessImage(env, bytes);
+    const qa = await assessImage(env, page, bytes);
     const key = `jobs/${job.id}/images/page-${String(page.page_no).padStart(2, '0')}-${task.variant}-${task.nonce ?? 'initial'}.png`;
     await env.ASSETS.put(key, bytes, { httpMetadata: { contentType: 'image/png' } });
     const column = task.variant === 'a' ? 'image_a_key' : 'image_b_key';
@@ -761,12 +1014,19 @@ async function handleQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<vo
   for (const message of batch.messages) {
     try { await processTask(env, message.body); message.ack(); }
     catch (error) {
-      if (message.attempts >= 3) {
+      const reason = error instanceof Error ? error.message : String(error);
+      const userReason = userFacingAiError(reason);
+      const job = await getJob(env, message.body.jobId);
+      if (job) await updateJob(env, job.id, { last_error: reason });
+      const nonRetryable = /daily free allocation|무료 할당량|이미지 프롬프트|이미지 계획 응답|프롬프트가 촬영 장면|문체|문장|제목|부제|정보량|중복|CTA|카드 문구 구조/i.test(reason);
+      if (nonRetryable || message.attempts >= 3) {
         await markFailure(env, message.body.jobId, error);
-        const job = await getJob(env, message.body.jobId);
-        if (job) await sendMessage(env, job.chat_id, `작업 실패 · ${job.id}\n${error instanceof Error ? error.message : String(error)}`);
+        if (job) await sendMessage(env, job.chat_id, `작업 실패 · ${job.id}\n${userReason}`);
         message.ack();
-      } else message.retry({ delaySeconds: Math.min(60, message.attempts * 8) });
+      } else {
+        if (message.attempts === 1 && job) await sendMessage(env, job.chat_id, `처리가 지연되어 한 번 재시도합니다.\n현재 단계: ${message.body.type}\n작업: ${job.id}`);
+        message.retry({ delaySeconds: Math.min(60, message.attempts * 8) });
+      }
     }
   }
 }
@@ -782,7 +1042,24 @@ async function showReports(env: Env, chatId: string): Promise<void> {
 async function showJobs(env: Env, chatId: string): Promise<void> {
   const result = await env.DB.prepare('SELECT * FROM jobs WHERE chat_id=? ORDER BY created_at DESC LIMIT 10').bind(chatId).all<JobRow>();
   if (!result.results.length) { await sendMessage(env, chatId, '아직 생성한 작업이 없습니다.'); return; }
-  await sendMessage(env, chatId, result.results.map((job) => `${job.id} · ${job.status}\n${fileName(job.source_path)}${job.last_error ? `\n${clamp(job.last_error, 120)}` : ''}`).join('\n\n'));
+  await sendMessage(env, chatId, result.results.map((job) => `${job.id} · ${job.status}\n${fileName(job.source_path)}${job.last_error ? `\n${clamp(userFacingAiError(job.last_error), 420)}` : ''}`).join('\n\n'));
+}
+async function latestRecoverableJob(env: Env, chatId: string): Promise<JobRow | null> {
+  const result = await env.DB.prepare(`SELECT * FROM jobs WHERE chat_id=? AND status IN ('FAILED_RETRYABLE','COPY_DRAFTING','COPY_DRAFTED','COPY_APPROVED','PROMPT_DRAFTING','PROMPT_DRAFTED') ORDER BY updated_at DESC LIMIT 1`).bind(chatId).first<JobRow>();
+  return result ?? null;
+}
+function isVisualRecovery(job: JobRow): boolean {
+  return /이미지|프롬프트|visual|flux/i.test(job.last_error ?? '') || job.status === 'PROMPT_DRAFTING' || job.status === 'PROMPT_DRAFTED';
+}
+async function enqueueMissingImages(env: Env, job: JobRow): Promise<boolean> {
+  const pages = (await getPages(env, job.id)).filter((page) => page.image_required && (page.status === 'IMAGE_GENERATING' || page.image_a_key || page.image_b_key));
+  if (!pages.length) return false;
+  await updateJob(env, job.id, { status: 'IMAGE_GENERATING', last_error: null });
+  for (const page of pages) {
+    if (!page.image_a_key) await env.JOBS.send({ type: 'generate_image', jobId: job.id, pageNo: page.page_no, variant: 'a', nonce: shortId(6) });
+    if (!page.image_b_key) await env.JOBS.send({ type: 'generate_image', jobId: job.id, pageNo: page.page_no, variant: 'b', nonce: shortId(6) });
+  }
+  return true;
 }
 async function handleReply(env: Env, message: TelegramMessage): Promise<boolean> {
   if (!message.text) return false;
@@ -813,7 +1090,30 @@ async function handleMessage(env: Env, message: TelegramMessage): Promise<void> 
   const command = text.split(/\s+/)[0].toLowerCase();
   if (command === '/new' || command === '/새카드뉴스') return showReports(env, chatId);
   if (command === '/jobs' || command === '/작업') return showJobs(env, chatId);
+  if (command === '/retry' || command === '/재시도') {
+    const job = await latestRecoverableJob(env, chatId);
+    if (!job) { await sendMessage(env, chatId, '다시 실행할 수 있는 작업이 없습니다. /new로 새 작업을 시작하세요.'); return; }
+    if (await enqueueMissingImages(env, job)) {
+      await sendMessage(env, chatId, `빠진 이미지 후보를 이어서 생성합니다 · ${job.id}\n무료 할당량 오류였다면 초기화 시각 이후 /retry를 눌러 주세요.`);
+      return;
+    }
+    const task: QueueTask = isVisualRecovery(job) ? { type: 'draft_visuals', jobId: job.id } : { type: 'draft_copy', jobId: job.id };
+    await env.JOBS.send(task);
+    await sendMessage(env, chatId, `작업을 이어서 다시 실행합니다 · ${job.id}\n무료 할당량 오류였다면 초기화 시각 이후 /retry를 눌러 주세요.`);
+    return;
+  }
   if (await handleReply(env, message)) return;
+  if (text && !text.startsWith('/') && text.length >= 4) {
+    const job = await latestRecoverableJob(env, chatId);
+    if (job) {
+      const task: QueueTask = isVisualRecovery(job)
+        ? { type: 'revise_prompts', jobId: job.id, instruction: text }
+        : { type: 'draft_copy', jobId: job.id, instruction: text };
+      await env.JOBS.send(task);
+      await sendMessage(env, chatId, `자연어 수정 요청을 반영해 ${task.type === 'revise_prompts' ? '이미지 계획' : '문안'}을 다시 작성합니다.\n작업: ${job.id}`);
+      return;
+    }
+  }
   await sendMessage(env, chatId, '사용법\n/new — 게시된 HTML 리포트 선택\n/jobs — 최근 작업 확인\n\n수정 요청 버튼을 누른 뒤, 열린 입력창이나 다음 메시지에 수정 내용을 보내세요.');
 }
 async function handleCallback(env: Env, query: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
@@ -832,7 +1132,12 @@ async function handleCallback(env: Env, query: NonNullable<TelegramUpdate['callb
   }
   const job = await getJob(env, id);
   if (!job || job.chat_id !== chatId) { await sendMessage(env, chatId, '작업을 찾지 못했습니다.'); return; }
-  if (action === 'ca') { await updateJob(env, id, { status: 'COPY_APPROVED' }); await sendPromptReview(env, job); return; }
+  if (action === 'ca') {
+    await updateJob(env, id, { status: 'COPY_APPROVED', last_error: null });
+    await env.JOBS.send({ type: 'draft_visuals', jobId: id });
+    await sendMessage(env, chatId, `문구를 승인했습니다 · ${id}\n이미지 계획을 별도 단계로 작성합니다. 완료되면 다시 알려드리겠습니다.`);
+    return;
+  }
   if (action === 'ce') { await registerReply(env, chatId, id, 'edit_copy', `아래 입력창에 수정 내용을 한 번에 적어 보내주세요. 이 메시지에 답장해도 되고, 그냥 다음 메시지로 보내도 됩니다.\n\n페이지별 요청과 전체 요청을 함께 쓸 수 있어요.\n예: 표지는 한 문장으로 줄이고, 본문 1은 표지와 겹치지 않게 배경 설명으로 바꿔줘. 전체 본문은 페이지당 2~3문장으로 줄여줘.\n\n작업: ${id}`); return; }
   if (action === 'cr') { await env.JOBS.send({ type: 'draft_copy', jobId: id, instruction: '기존 초안과 다른 구조로 전체를 다시 작성하라.' }); await sendMessage(env, chatId, '문구를 다시 생성합니다.'); return; }
   if (action === 'pe') { await registerReply(env, chatId, id, 'edit_prompts', `이미지 계획 수정사항을 이 메시지에 답장하세요.\n예: 실사 위주로 바꾸고 4페이지는 건물 없이 자연스러운 일러스트로 표현해줘.\n작업: ${id}`); return; }
@@ -844,7 +1149,7 @@ async function handleCallback(env: Env, query: NonNullable<TelegramUpdate['callb
       await env.JOBS.send({ type: 'generate_image', jobId: id, pageNo: page.page_no, variant: 'a' });
       await env.JOBS.send({ type: 'generate_image', jobId: id, pageNo: page.page_no, variant: 'b' });
     }
-    await sendMessage(env, chatId, `이미지 ${pages.length}페이지 × 2안을 생성합니다.`);
+    await sendMessage(env, chatId, `이미지 ${pages.length}페이지 × 2안을 생성합니다.\n페이지별 결과가 준비되는 즉시 순서대로 보내드리겠습니다.`);
     return;
   }
   if (action === 'ia' || action === 'ib') {
