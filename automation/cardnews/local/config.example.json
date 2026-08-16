@@ -1,0 +1,20 @@
+{
+  "workerBaseUrl": "https://srcplus-cardnews.example.workers.dev",
+  "runnerToken": "SET_IN_UNTRACKED_CONFIG_JSON",
+  "pollIntervalSeconds": 10,
+  "ollama": {
+    "baseUrl": "http://127.0.0.1:11434",
+    "model": "qwen3.5:4b",
+    "contextTokens": 16384,
+    "temperature": 0.2
+  },
+  "comfyui": {
+    "baseUrl": "http://127.0.0.1:8188",
+    "checkpoint": "Realistic_Vision_V6.0_NV_B1_fp16.safetensors",
+    "width": 512,
+    "height": 704,
+    "steps": 24,
+    "cfg": 5.5,
+    "sequentialCandidates": true
+  }
+}
