@@ -25,6 +25,12 @@ if ($models.models.name -notcontains $config.ollama.model) {
     throw "Ollama model '$($config.ollama.model)' is missing. Run: ollama pull $($config.ollama.model)"
 }
 
+$openCodex = Get-Command opencodex -ErrorAction SilentlyContinue
+if ($openCodex) {
+    & $openCodex.Source ensure | Out-Host
+    if ($LASTEXITCODE -ne 0) { throw 'OpenCodex could not be started.' }
+}
+
 try {
     $null = Invoke-RestMethod -Uri "$($config.comfyui.baseUrl)/system_stats" -TimeoutSec 2
 } catch {
@@ -33,5 +39,6 @@ try {
 
 Write-Host 'Local text and image services are ready.' -ForegroundColor Green
 Write-Host "Text: $($config.ollama.model) at $($config.ollama.baseUrl)"
+if ($openCodex) { Write-Host "Agent gateway: OpenCodex at $($config.opencodex.baseUrl)" }
 Write-Host "Image: $($config.comfyui.checkpoint) at $($config.comfyui.baseUrl)"
 Write-Host 'The outbound polling runner will be added after the Worker claim/complete contract is implemented.'

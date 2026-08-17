@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
-    [int]$MinimumFreeDiskGB = 20,
-    [int]$RecommendedFreeDiskGB = 30,
+    [string]$ModelRoot = 'D:\AI\Models\Ollama',
+    [int]$MinimumSystemDiskGB = 10,
+    [int]$MinimumModelDiskGB = 30,
+    [int]$RecommendedModelDiskGB = 50,
     [version]$MinimumNvidiaDriver = '527.41'
 )
 
@@ -21,7 +23,16 @@ function Add-Result {
 $systemDrive = $env:SystemDrive
 $drive = Get-PSDrive -Name $systemDrive.TrimEnd(':')
 $freeGB = [math]::Round($drive.Free / 1GB, 1)
-Add-Result 'Free disk' ($freeGB -ge $MinimumFreeDiskGB) "$freeGB GB on $systemDrive" "$MinimumFreeDiskGB GB minimum; $RecommendedFreeDiskGB GB recommended"
+Add-Result 'System disk' ($freeGB -ge $MinimumSystemDiskGB) "$freeGB GB on $systemDrive" "$MinimumSystemDiskGB GB minimum"
+
+$modelDriveName = [System.IO.Path]::GetPathRoot($ModelRoot).TrimEnd('\').TrimEnd(':')
+$modelDrive = Get-PSDrive -Name $modelDriveName -ErrorAction SilentlyContinue
+if ($modelDrive) {
+    $modelFreeGB = [math]::Round($modelDrive.Free / 1GB, 1)
+    Add-Result 'Model disk' ($modelFreeGB -ge $MinimumModelDiskGB) "$modelFreeGB GB on $($modelDriveName):" "$MinimumModelDiskGB GB minimum; $RecommendedModelDiskGB GB recommended"
+} else {
+    Add-Result 'Model disk' $false "$($modelDriveName): is not connected" "external SSD containing $ModelRoot"
+}
 
 $os = Get-CimInstance Win32_OperatingSystem
 $ramGB = [math]::Round($os.TotalVisibleMemorySize / 1MB, 1)
@@ -64,7 +75,7 @@ try {
 Add-Result 'ComfyUI API' $comfyReachable $(if ($comfyReachable) { 'http://127.0.0.1:8188 reachable' } else { 'not installed or not running' }) 'reachable when the local runner starts'
 
 $results | Format-Table -AutoSize
-$blocking = @($results | Where-Object { $_.Ready -eq 'BLOCKED' -and $_.Item -in @('Free disk', 'System RAM', 'NVIDIA GPU', 'NVIDIA driver', 'git', 'node', 'npm') })
+$blocking = @($results | Where-Object { $_.Ready -eq 'BLOCKED' -and $_.Item -in @('System disk', 'Model disk', 'System RAM', 'NVIDIA GPU', 'NVIDIA driver', 'git', 'node', 'npm') })
 if ($blocking.Count -gt 0) {
     Write-Host "`nInstallation is intentionally stopped. Resolve the BLOCKED hardware prerequisites first." -ForegroundColor Yellow
     exit 2

@@ -3,5 +3,6 @@ node_modules/
 wrangler.generated.jsonc
 .dev.vars
 local/config.json
+local/output/
 __pycache__/
 *.pyc

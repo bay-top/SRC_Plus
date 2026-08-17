@@ -674,10 +674,11 @@ function validateVisualPrompt(value: string): string {
   const prompt = clamp(value.trim(), 1300);
   if (!prompt) throw new Error('빈 이미지 프롬프트가 생성됐습니다.');
   if (/[가-힣]/.test(prompt)) throw new Error('이미지 프롬프트에 한국어가 포함됐습니다. 다시 생성합니다.');
-  if (prompt.split(/\s+/).length < 90) throw new Error('이미지 프롬프트가 촬영 장면을 구체화하기에 너무 짧습니다. 다시 생성합니다.');
+  const wordCount = prompt.split(/\s+/).length;
+  if (wordCount < 110 || wordCount > 150) throw new Error(`이미지 프롬프트는 110~150개 영어 단어여야 합니다. 현재 ${wordCount}개입니다.`);
   if (/split[- ]screen|infographic|collage|montage|series of|(?:three|four|multiple) (?:photos|images|scenes)|(?:^|\W)(?:chart|graph)(?:\W|$)|text overlay|question mark|red flag|weighing scale|balance scale|stack of (?:cash|money)|counting (?:cash|money)|sketch|drawing|(?:^|\W)illustration(?:\W|$)|anime|animation|cartoon|painting|watercolor|vector art|3d render|(?:^|\W)cgi(?:\W|$)|face[- ]led|headshot|portrait(?:\W|$)|face close[- ]up|close[- ]up portrait|close[- ]up of (?:a|one|an) (?:person|man|woman|investor|professional|worker)/i.test(prompt)) throw new Error('이미지 프롬프트에 다중 장면·그래프·일러스트·인물 얼굴 중심 구도가 포함됐습니다. 사람은 공간을 설명하는 보조 요소로만 사용하고 실제 촬영 장면으로 다시 생성합니다.');
-  if (!/(?:camera|shot|view|angle|lens|depth of field)/i.test(prompt) || !/(?:light|lighting|daylight|dusk|dawn|overcast|sunset)/i.test(prompt)) throw new Error('이미지 프롬프트에 카메라 구도 또는 조명 지시가 빠졌습니다. 다시 생성합니다.');
-  if (!/(?:no readable text|without readable text)/i.test(prompt) || !/(?:no (?:company )?logos?|without (?:company )?logos?)/i.test(prompt)) throw new Error('이미지 프롬프트에 글자와 로고 금지 지시가 빠졌습니다. 다시 생성합니다.');
+  if (!/(?:camera|shoot|shot|view|angle|lens|depth of field)/i.test(prompt) || !/(?:light|lighting|daylight|dusk|dawn|overcast|sunset)/i.test(prompt)) throw new Error('이미지 프롬프트에 카메라 구도 또는 조명 지시가 빠졌습니다. 다시 생성합니다.');
+  if (!/(?:no readable text|without readable text)/i.test(prompt) || !/(?:no readable text[^.]{0,60}\blogos?\b|without readable text[^.]{0,60}\blogos?\b|no (?:company )?logos?|without (?:company )?logos?)/i.test(prompt)) throw new Error('이미지 프롬프트에 글자와 로고 금지 지시가 빠졌습니다. 다시 생성합니다.');
   return prompt;
 }
 function comparable(value: string): string {

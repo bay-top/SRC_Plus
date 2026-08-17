@@ -2,11 +2,27 @@
   "workerBaseUrl": "https://srcplus-cardnews.example.workers.dev",
   "runnerToken": "SET_IN_UNTRACKED_CONFIG_JSON",
   "pollIntervalSeconds": 10,
+  "textProvider": "ollama",
+  "storage": {
+    "ollamaModels": "D:\\AI\\Models\\Ollama",
+    "imageModels": "D:\\AI\\Models\\StableDiffusion",
+    "comfyuiApp": "D:\\AI\\Apps\\ComfyUI",
+    "projectData": "D:\\AI\\Projects\\SRCPlus"
+  },
   "ollama": {
     "baseUrl": "http://127.0.0.1:11434",
-    "model": "qwen3.5:4b",
-    "contextTokens": 16384,
+    "model": "qwen3:4b-instruct",
+    "contextTokens": 8192,
     "temperature": 0.2
+  },
+  "opencodex": {
+    "baseUrl": "http://127.0.0.1:10100/v1",
+    "role": "shared agent gateway; SRC Plus generation calls Ollama directly"
+  },
+  "visionReview": {
+    "model": "qwen3.5:4b",
+    "enabled": false,
+    "note": "enable after the text and image-generation path is stable"
   },
   "comfyui": {
     "baseUrl": "http://127.0.0.1:8188",
