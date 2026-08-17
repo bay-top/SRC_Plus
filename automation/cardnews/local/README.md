@@ -58,6 +58,14 @@ py -3 .\run_local_pipeline.py `
 
 출력 JSON에는 실제로 사용한 모델, 문안 교정 횟수와 이미지 계획 교정 횟수가 함께 기록된다.
 
+ComfyUI가 실행된 뒤에는 다음 명령으로 페이지별 A/B 이미지를 순차 생성한다. 생성 결과는 `output/images`에 저장하고, 기존 PNG가 있으면 재사용한다.
+
+```powershell
+py -3 .\generate_comfy_images.py `
+  --manifest '.\output\kb-balhae-luna.json' `
+  --output-dir 'D:\AI\Projects\SRCPlus\output\kb-balhae-images'
+```
+
 OpenCodex의 현재 Codex 계정 모델과 품질을 비교할 때는 다음처럼 실행한다. 이 경로는 Ollama와 달리 현재 Codex 계정의 사용량 정책을 따른다.
 
 ```powershell
