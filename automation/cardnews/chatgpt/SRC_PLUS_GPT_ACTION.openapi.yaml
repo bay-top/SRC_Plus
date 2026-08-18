@@ -1,0 +1,65 @@
+openapi: 3.1.0
+info:
+  title: SRC Plus Published Reports
+  version: 1.0.0
+  description: Read-only access to SRC Plus reports that are published on the configured GitHub main branch.
+servers:
+  - url: https://REPLACE_WITH_CARDNEWS_WORKER_BASE_URL
+paths:
+  /api/gpt/reports:
+    get:
+      operationId: listPublishedReports
+      summary: List every currently published SRC Plus report available for cardnews work.
+      responses:
+        '200':
+          description: Published report list.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [reports]
+                properties:
+                  reports:
+                    type: array
+                    items:
+                      type: object
+                      required: [source_path, title, date, category]
+                      properties:
+                        source_path: { type: string, example: reports_insights_example.html }
+                        title: { type: string }
+                        date: { type: string }
+                        category: { type: string }
+  /api/gpt/report:
+    get:
+      operationId: getPublishedReportHtml
+      summary: Read the full original HTML of one report selected from listPublishedReports.
+      parameters:
+        - name: source_path
+          in: query
+          required: true
+          description: The exact source_path returned by listPublishedReports.
+          schema:
+            type: string
+            pattern: '^reports_.*\\.html$'
+      responses:
+        '200':
+          description: Selected published report and its original HTML.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [source_path, title, category, date, html]
+                properties:
+                  source_path: { type: string }
+                  title: { type: string }
+                  category: { type: string }
+                  date: { type: string }
+                  html: { type: string }
+components:
+  securitySchemes:
+    SrcPlusActionKey:
+      type: apiKey
+      in: header
+      name: x-srcplus-action-key
+security:
+  - SrcPlusActionKey: []

@@ -58,6 +58,7 @@ interface Env {
   GITHUB_TOKEN: string;
   CALLBACK_HMAC_SECRET: string;
   SETUP_TOKEN: string;
+  GPT_ACTION_TOKEN?: string;
 }
 
 interface TelegramMessage {
@@ -429,6 +430,11 @@ async function runVisionModel(env: Env, input: Record<string, unknown>): Promise
 function json(data: unknown, status = 200): Response {
   return new Response(JSON.stringify(data, null, 2), { status, headers: { 'content-type': 'application/json; charset=utf-8' } });
 }
+function gptActionAuthorized(env: Env, request: Request): boolean {
+  const expected = env.GPT_ACTION_TOKEN?.trim();
+  if (!expected) return false;
+  return request.headers.get('x-srcplus-action-key') === expected;
+}
 function shortId(length = 12): string {
   const alphabet = 'abcdefghjkmnpqrstuvwxyz23456789';
   const bytes = crypto.getRandomValues(new Uint8Array(length));
@@ -601,6 +607,27 @@ async function listReports(env: Env): Promise<ReportChoice[]> {
     reports.push({ name: item.name, path: item.path, title: meta.title || item.name, date: meta.date || '', category: meta.cat || '' });
   }
   return reports.sort((a, b) => b.date.localeCompare(a.date) || b.name.localeCompare(a.name));
+}
+async function handleGptReports(env: Env, request: Request): Promise<Response> {
+  if (!gptActionAuthorized(env, request)) return json({ error: 'unauthorized' }, 401);
+  const reports = await listReports(env);
+  return json({ reports: reports.map((report) => ({
+    source_path: report.path,
+    title: report.title,
+    date: report.date,
+    category: report.category,
+  })) });
+}
+async function handleGptReport(env: Env, request: Request): Promise<Response> {
+  if (!gptActionAuthorized(env, request)) return json({ error: 'unauthorized' }, 401);
+  const sourcePath = new URL(request.url).searchParams.get('source_path')?.trim() ?? '';
+  if (!/^reports_.*\.html$/i.test(sourcePath) || /_PREVIEW/i.test(sourcePath) || sourcePath.includes('/') || sourcePath.includes('..')) {
+    return json({ error: 'invalid source_path' }, 400);
+  }
+  const html = await fetchGithubFileText(env, sourcePath);
+  const meta = parseReportMeta(html);
+  if (!meta?.published) return json({ error: 'unpublished report' }, 404);
+  return json({ source_path: sourcePath, title: meta.title ?? fileName(sourcePath), category: meta.cat ?? '', date: meta.date ?? '', html });
 }
 async function dispatchGithub(env: Env, action: 'parse' | 'render', jobId: string, sourcePath: string): Promise<void> {
   const response = await fetch(`https://api.github.com/repos/${encodeURIComponent(env.GITHUB_OWNER)}/${encodeURIComponent(env.GITHUB_REPO)}/dispatches`, {
@@ -1588,6 +1615,8 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true, service: 'srcplus-cardnews' });
+    if (request.method === 'GET' && url.pathname === '/api/gpt/reports') return handleGptReports(env, request);
+    if (request.method === 'GET' && url.pathname === '/api/gpt/report') return handleGptReport(env, request);
     if (request.method === 'POST' && url.pathname === '/telegram') return handleTelegram(env, request);
     if (request.method === 'POST' && url.pathname === '/api/callback') return handleGithubCallback(env, request);
     if (request.method === 'POST' && url.pathname === '/api/report-published') return handleReportPublished(env, request);

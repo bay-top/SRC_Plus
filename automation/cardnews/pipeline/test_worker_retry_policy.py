@@ -48,6 +48,17 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         self.assertIn("action === 'hs'", source)
         self.assertIn("mode: 'chatgpt' | 'legacy'", source)
 
+    def test_custom_gpt_can_only_read_published_root_reports_with_an_action_key(self) -> None:
+        source = (ROOT / "src" / "index.ts").read_text(encoding="utf-8")
+        schema = (ROOT / "chatgpt" / "SRC_PLUS_GPT_ACTION.openapi.yaml").read_text(encoding="utf-8")
+        self.assertIn("/api/gpt/reports", source)
+        self.assertIn("/api/gpt/report", source)
+        self.assertIn("GPT_ACTION_TOKEN", source)
+        self.assertIn("x-srcplus-action-key", source)
+        self.assertIn("meta?.published", source)
+        self.assertIn("listPublishedReports", schema)
+        self.assertIn("getPublishedReportHtml", schema)
+
     def test_git_notification_workflow_only_notifies_added_or_modified_reports(self) -> None:
         workflow = (ROOT.parents[1] / ".github" / "workflows" / "cardnews-new-report-notify.yml").read_text(encoding="utf-8")
         self.assertIn("reports_*.html", workflow)

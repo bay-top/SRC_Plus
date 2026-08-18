@@ -24,19 +24,26 @@
 
 - **Image Generation: 켬**
 - **Code Interpreter & Data Analysis: 켬** — HTML과 JSON 파일을 읽고 저장하기 위해 사용
-- **Web Search: 끔** — 업로드 HTML 밖의 사실을 임의로 보충하지 않게 함
-- Actions와 Apps는 설정하지 않음
+- **Web Search: 끔** — 원문 밖의 사실을 임의로 보충하지 않게 함
+
+### Action: GitHub 발행 원문 조회
+
+1. **Actions**에서 **Create new action**을 선택한다.
+2. `SRC_PLUS_GPT_ACTION.openapi.yaml`을 붙여 넣고, 서버 URL의 `https://REPLACE_WITH_CARDNEWS_WORKER_BASE_URL`을 실제 `CARDNEWS_WORKER_BASE_URL`로 바꾼다.
+3. Authentication은 **API Key / Custom header**를 고르고 header 이름을 `x-srcplus-action-key`로 설정한다.
+4. `GPT_ACTION_TOKEN` Worker Secret 값을 API key 값으로 입력한다. 이 값은 저장소나 대화에 기록하지 않는다.
+5. Actions Test에서 `listPublishedReports`와 `getPublishedReportHtml`을 각각 한 번 실행한다.
 
 ### Conversation starter
 
 ```text
-Telegram에서 받은 HTML과 editorial.json을 업로드했다. 중앙 규칙에 맞는 카드뉴스 JSON만 만들어줘.
+현재 발행된 SRC Plus 리포트 목록을 보여줘. 내가 하나를 고르면 원문을 읽고 중앙 규칙에 맞는 카드뉴스 JSON만 만들어줘.
 ```
 
 ## 3. 첫 테스트
 
-1. Telegram의 `/new`에서 HTML을 하나 선택한다.
-2. 받은 HTML과 `editorial.json`을 GPT에 업로드한다.
+1. Custom GPT에서 발행 리포트 목록을 불러오고 하나를 선택한다. Telegram의 `/new` 선택도 같은 GitHub 목록을 사용한다.
+2. GPT가 원문 HTML을 Action으로 직접 읽는다.
 3. JSON 결과를 `cardnews.json` 파일로 저장한다.
 4. Telegram에 `cardnews.json`을 첨부한다.
 5. 봇이 검증을 통과시키면 GPT에서 페이지별 최종 이미지를 생성하고, 승인 이미지를 Telegram에 순서대로 보낸다.
