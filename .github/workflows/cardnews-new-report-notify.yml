@@ -1,0 +1,38 @@
+name: Notify new SRC Plus cardnews report
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'reports_*.html'
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r automation/cardnews/pipeline/requirements.txt
+      - name: Notify approved report changes
+        env:
+          CARDNEWS_WORKER_BASE_URL: ${{ secrets.CARDNEWS_WORKER_BASE_URL }}
+          CARDNEWS_CALLBACK_HMAC_SECRET: ${{ secrets.CARDNEWS_CALLBACK_HMAC_SECRET }}
+          COMMIT_SHA: ${{ github.sha }}
+          BEFORE_SHA: ${{ github.event.before }}
+        run: |
+          if [[ "$BEFORE_SHA" =~ ^0+$ ]]; then
+            changed_reports=$(git diff-tree --no-commit-id --name-only --diff-filter=AM -r "$COMMIT_SHA" -- 'reports_*.html')
+          else
+            changed_reports=$(git diff --name-only --diff-filter=AM "$BEFORE_SHA" "$COMMIT_SHA" -- 'reports_*.html')
+          fi
+          while IFS= read -r report; do
+            test -n "$report" || continue
+            python automation/cardnews/pipeline/report_notification.py --input "$report" --event-id "report:$COMMIT_SHA:$report"
+          done <<< "$changed_reports"

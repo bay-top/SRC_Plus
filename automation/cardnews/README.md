@@ -8,6 +8,19 @@ Cloudflare Workers AI 한도를 파이프라인의 전제조건으로 두지 않
 
 2026-08-17 실제 PC에서 Qwen 로컬 경로와 OpenCodex Luna 품질 경로를 비교한 결과는 [`evaluation/local-model-first-run-2026-08-17.md`](evaluation/local-model-first-run-2026-08-17.md)에 기록했다.
 
+## ChatGPT 반자동 고품질 흐름
+
+API 이미지 비용 대신 기존 ChatGPT 사용 범위 안에서 문안과 이미지를 만들 때는 Git → Telegram → ChatGPT → Telegram → PPTX 흐름을 사용한다.
+
+1. `main`에 `published=true`인 `reports_*.html`을 새로 추가하거나 수정하면 GitHub Actions가 Telegram에 알린다.
+2. Telegram에서 `ChatGPT 작업 패킷 준비`를 누르면 Worker가 Git 원본 HTML과 `editorial.json`, 작업 안내 파일을 보낸다.
+3. [chatgpt/SRC_PLUS_GPT_INSTRUCTIONS.md](chatgpt/SRC_PLUS_GPT_INSTRUCTIONS.md)를 전용 Custom GPT의 Instructions에 붙여 넣고, Telegram에서 받은 HTML과 `editorial.json`을 업로드한다.
+4. ChatGPT가 반환한 최종 JSON을 파일로 저장해 Telegram에 첨부한다. Worker가 문안·프롬프트 규칙을 검증한다.
+5. ChatGPT에서 검토·승인한 이미지를 Telegram 요청 순서대로 한 장씩 보낸다.
+6. 모든 승인 이미지가 도착하면 기존 GitHub Actions가 PPTX와 PNG ZIP을 만들고 Telegram에 전송한다.
+
+이 경로는 Custom GPT를 Git 이벤트로 무인 호출하지 않는다. Git·Telegram은 파일 전달과 상태 관리를 자동화하고, ChatGPT에서의 문안·이미지 생성과 최종 이미지는 사람이 검토한다. 새 Git 알림 workflow는 `CARDNEWS_WORKER_BASE_URL`, `CARDNEWS_CALLBACK_HMAC_SECRET` 두 기존 Secret을 사용한다.
+
 ## 반영된 운영 규칙
 
 문구의 단일 기준은 `config/editorial.json`이다. Worker의 최초 생성·수정·전체 재생성, HTML 구조화 파서, PPT 렌더 직전 검증이 모두 이 파일을 읽는다. 글자 수나 문체를 바꿀 때는 다른 프롬프트를 직접 수정하지 않고 이 파일만 변경한다.

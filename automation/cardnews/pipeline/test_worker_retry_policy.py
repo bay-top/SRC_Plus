@@ -37,6 +37,20 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         self.assertIn("runVisionModel", source)
         self.assertIn("OPENAI_API_KEY", source)
 
+    def test_chatgpt_handoff_preserves_human_review_before_rendering(self) -> None:
+        source = (ROOT / "src" / "index.ts").read_text(encoding="utf-8")
+        self.assertIn("/api/report-published", source)
+        self.assertIn("sendChatGptPackage", source)
+        self.assertIn("import_chatgpt_json", source)
+        self.assertIn("MANUAL_IMAGE_UPLOADING", source)
+        self.assertIn("storeManualImage", source)
+
+    def test_git_notification_workflow_only_notifies_added_or_modified_reports(self) -> None:
+        workflow = (ROOT.parents[1] / ".github" / "workflows" / "cardnews-new-report-notify.yml").read_text(encoding="utf-8")
+        self.assertIn("reports_*.html", workflow)
+        self.assertIn("--diff-filter=AM", workflow)
+        self.assertIn("report_notification.py", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

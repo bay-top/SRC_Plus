@@ -3,6 +3,7 @@ import editorialRules from '../config/editorial.json';
 type JobStatus =
   | 'SELECTED' | 'PARSING' | 'SOURCE_PARSED' | 'COPY_DRAFTING' | 'COPY_DRAFTED'
   | 'COPY_APPROVED' | 'PROMPT_DRAFTING' | 'PROMPT_DRAFTED' | 'IMAGE_GENERATING' | 'IMAGES_GENERATED' | 'RENDERING'
+  | 'CHATGPT_DRAFTING' | 'MANUAL_IMAGE_UPLOADING'
   | 'RENDERED' | 'FINAL_APPROVED' | 'FAILED_RETRYABLE' | 'FAILED_FINAL' | 'CANCELLED';
 
 type QueueTask =
@@ -63,6 +64,8 @@ interface TelegramMessage {
   message_id: number;
   chat: { id: number };
   text?: string;
+  document?: { file_id: string; file_name?: string; mime_type?: string; file_size?: number };
+  photo?: Array<{ file_id: string; file_size?: number; width: number; height: number }>;
   reply_to_message?: { message_id: number };
 }
 interface TelegramUpdate {
@@ -122,6 +125,7 @@ interface CallbackPayload {
   zip_key?: string;
   error?: string;
 }
+interface ReportPublishedPayload { event_id: string; source_path: string }
 interface AiDraft {
   report_title: string;
   category: 'insights' | 'issues' | 'sectors';
@@ -501,6 +505,13 @@ async function sendDocument(env: Env, chatId: string, bytes: Uint8Array, name: s
   form.append('caption', caption);
   await telegramCall(env, 'sendDocument', form);
 }
+async function downloadTelegramFile(env: Env, fileId: string): Promise<{ bytes: Uint8Array; path: string }> {
+  const file = await telegramCall<{ file_path?: string }>(env, 'getFile', JSON.stringify({ file_id: fileId }), { 'content-type': 'application/json' });
+  if (!file.file_path) throw new Error('Telegram 파일 경로를 찾지 못했습니다.');
+  const response = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${file.file_path}`);
+  if (!response.ok) throw new Error(`Telegram 파일 다운로드 실패: ${response.status}`);
+  return { bytes: new Uint8Array(await response.arrayBuffer()), path: file.file_path };
+}
 async function answerCallback(env: Env, id: string, text = '처리 중'): Promise<void> {
   await telegramCall(env, 'answerCallbackQuery', JSON.stringify({ callback_query_id: id, text }), { 'content-type': 'application/json' });
 }
@@ -508,6 +519,11 @@ async function registerReply(env: Env, chatId: string, jobId: string, purpose: s
   const message = await sendMessage(env, chatId, text, undefined, true);
   await env.DB.prepare('INSERT OR REPLACE INTO telegram_prompts(chat_id,message_id,job_id,purpose) VALUES(?,?,?,?)')
     .bind(chatId, message.message_id, jobId, purpose).run();
+}
+async function registerAttachmentRequest(env: Env, chatId: string, jobId: string, purpose: string, text: string, pageNo?: number): Promise<void> {
+  const message = await sendMessage(env, chatId, text);
+  await env.DB.prepare('INSERT OR REPLACE INTO telegram_prompts(chat_id,message_id,job_id,purpose,page_no) VALUES(?,?,?,?,?)')
+    .bind(chatId, message.message_id, jobId, purpose, pageNo ?? null).run();
 }
 
 async function getSetting(env: Env, key: string): Promise<string | null> {
@@ -593,6 +609,47 @@ async function dispatchGithub(env: Env, action: 'parse' | 'render', jobId: strin
     body: JSON.stringify({ event_type: 'cardnews_job', client_payload: { action, job_id: jobId, source_path: sourcePath } }),
   });
   if (response.status !== 204) throw new Error(`GitHub dispatch ${response.status}: ${await response.text()}`);
+}
+
+async function sendChatGptPackage(env: Env, job: JobRow): Promise<void> {
+  const html = await fetchGithubFileText(env, job.source_path);
+  const handoff = `SRC Plus ChatGPT 작업 패킷\n\n1. ChatGPT에서 전용 SRC Plus GPT를 연다.\n2. 함께 전송된 HTML과 editorial.json을 업로드한다.\n3. GPT 지침에 따라 JSON만 출력하게 한다.\n4. JSON을 파일로 저장해 이 Telegram 채팅에 첨부한다.\n5. 봇이 문안·이미지 프롬프트를 검증한 뒤, 페이지별 최종 이미지를 한 장씩 요청한다.\n\n중요: JSON에는 표지 1장과 본문 4장, visual_style, visual_brief_ko, visual_prompt가 모두 포함돼야 한다. 이미지 프롬프트는 영어 110~150단어, 마지막 문장은 \"No readable text, numbers, logos, signage or watermark.\"여야 한다.`;
+  await sendDocument(env, job.chat_id, new TextEncoder().encode(html), fileName(job.source_path), `ChatGPT에 업로드할 원본 HTML · ${job.id}`);
+  await sendDocument(env, job.chat_id, new TextEncoder().encode(JSON.stringify(editorialRules, null, 2)), 'editorial.json', 'SRC Plus 중앙 문안·이미지 규칙');
+  await sendDocument(env, job.chat_id, new TextEncoder().encode(handoff), 'SRC_PLUS_CHATGPT_HANDOFF.md', 'ChatGPT 작업 순서');
+  await registerAttachmentRequest(env, job.chat_id, job.id, 'import_chatgpt_json', `ChatGPT에서 나온 최종 JSON 파일을 이 채팅에 첨부하세요.\n작업: ${job.id}`);
+}
+
+async function sendManualPromptReview(env: Env, job: JobRow): Promise<void> {
+  const pages = (await getPages(env, job.id)).filter((page) => page.image_required);
+  const summary = pages.map((page) => `${page.page_no}페이지 · ${page.title}\n${page.body}\n\n이미지: ${page.visual_brief_ko}`).join('\n\n');
+  await sendLongMessage(env, job.chat_id, `ChatGPT JSON 검증을 통과했습니다.\n\n${summary}`);
+  await sendMessage(env, job.chat_id, `ChatGPT에서 각 페이지의 이미지를 생성·검토한 뒤, 승인 이미지를 순서대로 보내세요.`, [
+    [{ text: '이미지 업로드 시작', callback_data: `mu:${job.id}` }],
+    [{ text: 'ChatGPT에서 수정 후 JSON 재업로드', callback_data: `me:${job.id}` }],
+    [{ text: '작업 취소', callback_data: `cx:${job.id}` }],
+  ]);
+}
+
+async function requestNextManualImage(env: Env, job: JobRow): Promise<void> {
+  const page = (await getPages(env, job.id)).find((item) => item.image_required && !item.selected_key);
+  if (!page) {
+    await updateJob(env, job.id, { status: 'IMAGES_GENERATED' });
+    await sendMessage(env, job.chat_id, `모든 승인 이미지를 받았습니다. PPTX와 PNG를 생성합니다.\n작업: ${job.id}`);
+    await maybeRender(env, (await getJob(env, job.id)) as JobRow);
+    return;
+  }
+  await registerAttachmentRequest(env, job.chat_id, job.id, 'upload_manual_image', `${page.page_no}페이지 승인 이미지를 원본 파일 또는 사진으로 하나 보내세요.\n제목: ${page.title}\n\nChatGPT 이미지 프롬프트:\n${page.visual_prompt}`, page.page_no);
+}
+
+async function storeManualImage(env: Env, job: JobRow, page: PageRow, bytes: Uint8Array, sourcePath: string): Promise<void> {
+  if (bytes.byteLength < 10_000) throw new Error('이미지 파일이 너무 작습니다. 원본 이미지를 다시 보내세요.');
+  const extension = /\.png$/i.test(sourcePath) ? 'png' : /\.webp$/i.test(sourcePath) ? 'webp' : 'jpg';
+  const contentType = extension === 'png' ? 'image/png' : extension === 'webp' ? 'image/webp' : 'image/jpeg';
+  const key = `jobs/${job.id}/images/page-${String(page.page_no).padStart(2, '0')}-manual.${extension}`;
+  await env.ASSETS.put(key, bytes, { httpMetadata: { contentType } });
+  await env.DB.prepare("UPDATE pages SET image_a_key=?,selected_key=?,qa_a_json=?,status='IMAGE_SELECTED',updated_at=? WHERE job_id=? AND page_no=?")
+    .bind(key, key, JSON.stringify({ mode: 'manual_chatgpt_reviewed' }), now(), job.id, page.page_no).run();
 }
 
 function draftSchema(): Record<string, unknown> {
@@ -1170,7 +1227,7 @@ async function processTask(env: Env, task: QueueTask): Promise<void> {
   if (!job) throw new Error(`작업 ${task.jobId}을 찾지 못했습니다.`);
   if (job.status === 'CANCELLED' || job.status === 'FINAL_APPROVED') return;
   if (task.type === 'dispatch_parse') {
-    await updateJob(env, job.id, { status: 'PARSING', last_error: null });
+    if (job.status !== 'CHATGPT_DRAFTING') await updateJob(env, job.id, { status: 'PARSING', last_error: null });
     await dispatchGithub(env, 'parse', job.id, job.source_path);
     return;
   }
@@ -1291,6 +1348,41 @@ async function enqueueMissingImages(env: Env, job: JobRow): Promise<boolean> {
   }
   return true;
 }
+async function handleChatGptJsonDocument(env: Env, message: TelegramMessage): Promise<boolean> {
+  const document = message.document;
+  if (!document || !/\.json$/i.test(document.file_name ?? '')) return false;
+  const chatId = String(message.chat.id);
+  const prompt = await env.DB.prepare("SELECT message_id,job_id FROM telegram_prompts WHERE chat_id=? AND purpose='import_chatgpt_json' ORDER BY created_at DESC LIMIT 1")
+    .bind(chatId).first<{ message_id: number; job_id: string }>();
+  if (!prompt) return false;
+  const job = await getJob(env, prompt.job_id);
+  if (!job || job.chat_id !== chatId) return false;
+  const file = await downloadTelegramFile(env, document.file_id);
+  if (file.bytes.byteLength > 1_000_000) throw new Error('ChatGPT JSON 파일이 너무 큽니다. 텍스트 JSON만 보내세요.');
+  const raw = JSON.parse(new TextDecoder().decode(file.bytes)) as AiDraft;
+  const draft = normalizeDraft(raw);
+  await replacePages(env, job.id, draft);
+  await updateJob(env, job.id, { status: 'PROMPT_DRAFTED', last_error: null });
+  await env.DB.prepare('DELETE FROM telegram_prompts WHERE chat_id=? AND message_id=?').bind(chatId, prompt.message_id).run();
+  await sendManualPromptReview(env, (await getJob(env, job.id)) as JobRow);
+  return true;
+}
+async function handleManualImageAttachment(env: Env, message: TelegramMessage): Promise<boolean> {
+  const chatId = String(message.chat.id);
+  const job = await env.DB.prepare("SELECT * FROM jobs WHERE chat_id=? AND status='MANUAL_IMAGE_UPLOADING' ORDER BY updated_at DESC LIMIT 1").bind(chatId).first<JobRow>();
+  if (!job) return false;
+  const page = (await getPages(env, job.id)).find((item) => item.image_required && !item.selected_key);
+  if (!page) return false;
+  const photo = message.photo?.at(-1);
+  const document = message.document;
+  const fileId = photo?.file_id ?? (document?.mime_type?.startsWith('image/') ? document.file_id : undefined);
+  if (!fileId) return false;
+  const file = await downloadTelegramFile(env, fileId);
+  await storeManualImage(env, job, page, file.bytes, document?.file_name ?? file.path);
+  await sendMessage(env, chatId, `${page.page_no}페이지 이미지를 받았습니다.`);
+  await requestNextManualImage(env, (await getJob(env, job.id)) as JobRow);
+  return true;
+}
 async function handleReply(env: Env, message: TelegramMessage): Promise<boolean> {
   if (!message.text) return false;
   const chatId = String(message.chat.id);
@@ -1317,6 +1409,8 @@ async function handleMessage(env: Env, message: TelegramMessage): Promise<void> 
     return;
   }
   if (!(await requireAllowed(env, chatId))) return;
+  if (await handleChatGptJsonDocument(env, message)) return;
+  if (await handleManualImageAttachment(env, message)) return;
   const command = text.split(/\s+/)[0].toLowerCase();
   if (command === '/new' || command === '/새카드뉴스') return showReports(env, chatId);
   if (command === '/jobs' || command === '/작업') return showJobs(env, chatId);
@@ -1351,6 +1445,14 @@ async function handleCallback(env: Env, query: NonNullable<TelegramUpdate['callb
   if (!(await requireAllowed(env, chatId))) return;
   await answerCallback(env, query.id);
   const [action, id, pageRaw] = (query.data ?? '').split(':');
+  if (action === 'hg') {
+    const job = await getJob(env, id);
+    if (!job || job.chat_id !== chatId) { await sendMessage(env, chatId, '작업을 찾지 못했습니다.'); return; }
+    await updateJob(env, id, { status: 'CHATGPT_DRAFTING', last_error: null });
+    await env.JOBS.send({ type: 'dispatch_parse', jobId: id });
+    await sendMessage(env, chatId, `Git 원본 HTML을 확인하고 ChatGPT 작업 패킷을 준비합니다.\n작업: ${id}`);
+    return;
+  }
   if (action === 'fs') {
     const choice = await env.DB.prepare('SELECT source_path FROM file_choices WHERE choice_id=? AND chat_id=?').bind(id, chatId).first<{ source_path: string }>();
     if (!choice) { await sendMessage(env, chatId, '선택 항목이 만료됐습니다. /new를 다시 실행하세요.'); return; }
@@ -1366,6 +1468,15 @@ async function handleCallback(env: Env, query: NonNullable<TelegramUpdate['callb
     await updateJob(env, id, { status: 'COPY_APPROVED', last_error: null });
     await env.JOBS.send({ type: 'draft_visuals', jobId: id });
     await sendMessage(env, chatId, `문구를 승인했습니다 · ${id}\n이미지 계획을 별도 단계로 작성합니다. 완료되면 다시 알려드리겠습니다.`);
+    return;
+  }
+  if (action === 'mu') {
+    await updateJob(env, id, { status: 'MANUAL_IMAGE_UPLOADING', last_error: null });
+    await requestNextManualImage(env, (await getJob(env, id)) as JobRow);
+    return;
+  }
+  if (action === 'me') {
+    await registerAttachmentRequest(env, chatId, id, 'import_chatgpt_json', `ChatGPT에서 수정한 최종 JSON 파일을 이 채팅에 첨부하세요.\n작업: ${id}`);
     return;
   }
   if (action === 'ce') { await registerReply(env, chatId, id, 'edit_copy', `아래 입력창에 수정 내용을 한 번에 적어 보내주세요. 이 메시지에 답장해도 되고, 그냥 다음 메시지로 보내도 됩니다.\n\n페이지별 요청과 전체 요청을 함께 쓸 수 있어요.\n예: 표지는 한 문장으로 줄이고, 본문 1은 표지와 겹치지 않게 배경 설명으로 바꿔줘. 전체 본문은 페이지당 2~3문장으로 줄여줘.\n\n작업: ${id}`); return; }
@@ -1421,7 +1532,12 @@ async function handleGithubCallback(env: Env, request: Request): Promise<Respons
   if (!job) return json({ error: 'job not found' }, 404);
   if (payload.stage === 'SOURCE_PARSED' && payload.source_key) {
     await updateJob(env, job.id, { source_key: payload.source_key, status: 'SOURCE_PARSED' });
-    await env.JOBS.send({ type: 'draft_copy', jobId: job.id });
+    const refreshed = (await getJob(env, job.id)) as JobRow;
+    if (job.status === 'CHATGPT_DRAFTING') {
+      await sendChatGptPackage(env, refreshed);
+    } else {
+      await env.JOBS.send({ type: 'draft_copy', jobId: job.id });
+    }
   } else if (payload.stage === 'RENDERED' && payload.pptx_key && payload.zip_key) {
     await updateJob(env, job.id, { status: 'RENDERED', final_pptx_key: payload.pptx_key, final_zip_key: payload.zip_key });
     await env.JOBS.send({ type: 'notify_rendered', jobId: job.id });
@@ -1431,6 +1547,26 @@ async function handleGithubCallback(env: Env, request: Request): Promise<Respons
   }
   return json({ ok: true });
 }
+async function handleReportPublished(env: Env, request: Request): Promise<Response> {
+  const body = new Uint8Array(await request.arrayBuffer());
+  if (!(await verifyHmac(env.CALLBACK_HMAC_SECRET, body, request.headers.get('x-cardnews-signature')))) return new Response('unauthorized', { status: 401 });
+  const payload = JSON.parse(new TextDecoder().decode(body)) as ReportPublishedPayload;
+  if (!/^reports_.*\.html$/i.test(payload.source_path) || /_PREVIEW/i.test(payload.source_path)) return json({ error: 'invalid source path' }, 400);
+  const html = await fetchGithubFileText(env, payload.source_path);
+  const meta = parseReportMeta(html);
+  if (!meta?.published) return json({ ok: true, skipped: 'unpublished' });
+  if (!(await recordEvent(env, `report:${payload.event_id}`, 'report_published', payload))) return json({ ok: true, duplicate: true });
+  const chatId = await allowedChatId(env);
+  if (!chatId) return json({ ok: true, pending_admin_claim: true });
+  const jobId = shortId(12);
+  await env.DB.prepare("INSERT INTO jobs(id,chat_id,source_path,report_title,report_category,status) VALUES(?,?,?,?,?,'SELECTED')")
+    .bind(jobId, chatId, payload.source_path, meta.title ?? fileName(payload.source_path), meta.cat ?? '').run();
+  await sendMessage(env, chatId, `새 published 리포트가 Git에 등록됐습니다.\n${meta.title ?? fileName(payload.source_path)}\n\nChatGPT에서 문안·이미지를 만들 작업 패킷을 준비할까요?`, [
+    [{ text: 'ChatGPT 작업 패킷 준비', callback_data: `hg:${jobId}` }],
+    [{ text: '나중에', callback_data: `cx:${jobId}` }],
+  ]);
+  return json({ ok: true, job_id: jobId });
+}
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
@@ -1438,6 +1574,7 @@ export default {
     if (request.method === 'GET' && url.pathname === '/health') return json({ ok: true, service: 'srcplus-cardnews' });
     if (request.method === 'POST' && url.pathname === '/telegram') return handleTelegram(env, request);
     if (request.method === 'POST' && url.pathname === '/api/callback') return handleGithubCallback(env, request);
+    if (request.method === 'POST' && url.pathname === '/api/report-published') return handleReportPublished(env, request);
     return new Response('not found', { status: 404 });
   },
   async queue(batch: MessageBatch<QueueTask>, env: Env): Promise<void> { await handleQueue(batch, env); },
