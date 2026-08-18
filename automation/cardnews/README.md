@@ -2,11 +2,31 @@
 
 기존 `reports_*.html` 리포트 게시 흐름은 유지하고, 게시된 최종 HTML을 Telegram에서 선택해 SRC Plus 카드뉴스 PPTX와 PNG ZIP을 생성한다. 개인 컴퓨터가 꺼져 있어도 Cloudflare Worker와 GitHub Actions에서 실행된다.
 
+Cloudflare Workers AI 한도를 파이프라인의 전제조건으로 두지 않는다. 외부 provider와 GitHub Actions 실행기로 옮기는 단계별 설계는 [`evaluation/pipeline-redesign-no-cloudflare-ai-2026-08-15.md`](evaluation/pipeline-redesign-no-cloudflare-ai-2026-08-15.md)에 기록되어 있다.
+
+완전 무료·provider 사용량 제한 없는 실행을 위해 PC가 켜져 있을 때 Ollama와 ComfyUI를 사용하는 로컬 실행 경로를 준비하고 있다. 하드웨어 사전 점검, 고정 모델 프로필과 실행 구조는 [`local/README.md`](local/README.md)에 있다. 현재 배포본은 아직 로컬 실행기로 전환되지 않았다.
+
+2026-08-17 실제 PC에서 Qwen 로컬 경로와 OpenCodex Luna 품질 경로를 비교한 결과는 [`evaluation/local-model-first-run-2026-08-17.md`](evaluation/local-model-first-run-2026-08-17.md)에 기록했다.
+
+## ChatGPT 반자동 고품질 흐름
+
+API 이미지 비용 대신 기존 ChatGPT 사용 범위 안에서 문안과 이미지를 만들 때는 Git → Telegram → ChatGPT → Telegram → PPTX 흐름을 사용한다.
+
+1. `main`에 `published=true`인 `reports_*.html`을 새로 추가하거나 수정하면 GitHub Actions가 Telegram에 알린다.
+2. 새 등록 알림이 없어도 Telegram의 `/new`로 현재 `main`의 모든 `published=true` HTML 가운데 하나를 선택할 수 있다. 수정본과 보류 후 발행본도 같은 목록에 나타난다.
+3. Telegram에서 `ChatGPT 작업 패킷 준비`를 누르거나 `/new`에서 특정 리포트를 고르면 Worker가 Git 원본 HTML과 `editorial.json`, 작업 안내 파일을 보낸다.
+4. [chatgpt/SRC_PLUS_GPT_INSTRUCTIONS.md](chatgpt/SRC_PLUS_GPT_INSTRUCTIONS.md)를 전용 Custom GPT의 Instructions에 붙여 넣고, Telegram에서 받은 HTML과 `editorial.json`을 업로드한다.
+5. ChatGPT가 반환한 최종 JSON을 파일로 저장해 Telegram에 첨부한다. Worker가 문안·프롬프트 규칙을 검증한다.
+6. ChatGPT에서 검토·승인한 이미지를 Telegram 요청 순서대로 한 장씩 보낸다.
+7. 모든 승인 이미지가 도착하면 기존 GitHub Actions가 PPTX와 PNG ZIP을 만들고 Telegram에 전송한다.
+
+이 경로는 Custom GPT를 Git 이벤트로 무인 호출하지 않는다. Git·Telegram은 파일 전달과 상태 관리를 자동화하고, ChatGPT에서의 문안·이미지 생성과 최종 이미지는 사람이 검토한다. 새 Git 알림 workflow는 `CARDNEWS_WORKER_BASE_URL`, `CARDNEWS_CALLBACK_HMAC_SECRET` 두 기존 Secret을 사용한다.
+
 ## 반영된 운영 규칙
 
 문구의 단일 기준은 `config/editorial.json`이다. Worker의 최초 생성·수정·전체 재생성, HTML 구조화 파서, PPT 렌더 직전 검증이 모두 이 파일을 읽는다. 글자 수나 문체를 바꿀 때는 다른 프롬프트를 직접 수정하지 않고 이 파일만 변경한다.
 
-문구 생성은 중앙 규칙의 구조화 출력과 교정 지시를 지연 없이 따르도록 Workers AI `@cf/meta/llama-4-scout-17b-16e-instruct`를 사용한다. 이미지 생성과 비전 QA 모델은 별도로 유지한다.
+문구·이미지·비전 QA는 provider adapter를 통해 실행한다. `FREE_ONLY_MODE=true`가 유료·종량제 AI provider 호출을 차단한다. 무료 기본값은 AI Horde 텍스트와 Pollinations AI 이미지 생성, 자동 비전 QA 비활성화다. 따라서 Cloudflare Workers AI의 계정 전체 일일 Neurons 한도와 OpenAI API 비용을 사용하지 않는다. Pollinations의 현재 공식 `gen` endpoint는 API key를 요구하므로 무료 전용 모드에서는 키가 설정되어 있어도 사용하지 않고, 현재 동작이 확인된 legacy 이미지 endpoint를 3:4에 가까운 512×704로 먼저 시도한다. endpoint가 제한되면 공식 무료 서비스인 AI Horde 이미지 worker로 자동 fallback한다. 두 경로 모두 대기열·네트워크 시간 초과 시 작업을 보존한 채 `/retry`로 이어간다. 문안 생성과 이미지 계획 생성을 별도 Queue 단계로 분리하고, 한 번의 Queue 실행에서는 시간 초과를 막기 위해 최대 2회의 교정을 수행한 뒤 실패를 Queue에 돌려보낸다. Queue 전체는 중앙 규칙을 통과할 때까지 최대 10회 전달을 허용하고 그 뒤에만 사용자에게 실패로 알린다.
 
 - 저장소 루트의 `reports_*.html`만 탐색
 - `_PREVIEW` 파일 제외
@@ -23,6 +43,7 @@
 - 이미지는 사실적 편집 사진을 기본으로 하고, 개념 표현에만 자연스러운 일러스트 사용
 - 이미지 프롬프트에서 기업명·로고·간판·텍스트·숫자·워터마크를 금지
 - 비전 QA는 advisory 모드이며, 최종 선택은 Telegram에서 사람이 수행
+- 실패 작업은 `/retry`로 이어서 실행할 수 있고, 실패 뒤 보내는 자연어 수정 요청도 가장 최근 작업의 문안·이미지 계획 재작성으로 연결
 - Instagram 자동 게시는 포함하지 않음
 
 ## 구조
@@ -34,7 +55,7 @@ GitHub Actions: 구조화 파싱
         ↓ R2 + HMAC callback
 Cloudflare Worker
   ├─ D1 상태 머신
-  ├─ Workers AI 문구·이미지·선택적 비전 QA
+  ├─ 무료 AI provider adapter (AI Horde + Pollinations)
   ├─ R2 중간·최종 파일
   └─ Telegram 승인 UI
         ↓ repository_dispatch
@@ -106,6 +127,7 @@ CARDNEWS_SETUP_TOKEN
 CARDNEWS_GITHUB_PAT
 CARDNEWS_CALLBACK_HMAC_SECRET
 CARDNEWS_WORKER_BASE_URL
+OPENAI_API_KEY (선택 provider용)
 R2_ACCOUNT_ID
 R2_ACCESS_KEY_ID
 R2_SECRET_ACCESS_KEY
@@ -119,6 +141,12 @@ R2_SECRET_ACCESS_KEY
 4. Telegram에서 `/claim ...` 후 `/new`로 테스트한다.
 
 배포 워크플로는 `.github/workflows/cardnews-cloudflare-deploy.yml`에 있다. 수동 실행만 허용하며 Node.js 22에서 Wrangler 설정 생성과 타입 검사를 마친 뒤 D1 migration, Worker 배포, Telegram webhook 등록, health check를 수행한다.
+
+### AI provider 전환
+
+무료 기본 경로는 별도 provider secret 없이 AI Horde 익명 텍스트 생성과 Pollinations AI 이미지 생성을 사용한다. Pollinations 이미지 endpoint가 401·429·일시 오류를 반환하면 AI Horde 이미지 worker로 자동 fallback한다. AI Horde는 커뮤니티 worker 대기열이므로 텍스트는 90초, 이미지는 150초 안에 응답하지 않으면 작업을 보존한 채 실패시키고 `/retry`로 재시도한다. 무료 전용 모드에서는 `POLLINATIONS_API_KEY`와 `OPENAI_API_KEY`가 존재해도 유료 endpoint를 호출하지 않는다. Pollinations legacy endpoint는 공급자 정책 변경에 따라 제한될 수 있으므로 AI Horde fallback을 제거하지 않는다. 유료 provider 전환은 `FREE_ONLY_MODE=false`를 명시적으로 설정해야만 가능하다.
+
+이 무료 모드에서 Cloudflare는 아직 Telegram webhook·D1·R2를 제공하는 호스팅으로만 남아 있고 AI 호출에는 사용되지 않는다. 호스팅까지 완전히 제거하려면 별도 무료 호스팅과 데이터베이스를 선택한 뒤 2단계 이전 문서를 따른다.
 
 ## GitHub Actions 파이프라인
 
@@ -175,17 +203,18 @@ GitHub runner에는 Pretendard가 기본 설치되지 않으므로 현재 자동
 ```text
 SELECTED → PARSING → SOURCE_PARSED
 → COPY_DRAFTING → COPY_DRAFTED → COPY_APPROVED
-→ IMAGE_GENERATING → IMAGES_GENERATED
+→ PROMPT_DRAFTING → PROMPT_DRAFTED → IMAGE_GENERATING → IMAGES_GENERATED
 → RENDERING → RENDERED → FINAL_APPROVED
 ```
 
 ## 보안
 
 - Telegram webhook `secret_token` 검증
+- Queue 단계별 상태(`COPY_DRAFTING`, `PROMPT_DRAFTING`, `IMAGE_GENERATING`)와 실패 원인을 Telegram에 즉시 알림
 - `/claim` 1회 관리자 등록 또는 고정 chat ID 허용목록
 - GitHub PAT 저장소 범위 제한
 - GitHub Actions callback HMAC-SHA256 검증
 - Telegram update와 callback idempotency
-- Queue 3회 재시도
+- Queue 전체 최대 10회 재시도(한 번의 실행은 최대 2회 교정)
 - `_PREVIEW` 및 비공개 리포트 제외
 - 최종 파일 부분 전송 재개

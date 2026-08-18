@@ -18,6 +18,10 @@ def sentence_count(value: str) -> int:
     return len(re.findall(r"[.!?](?=(?:[\"'”’\)\]]*\s)|$)", value.strip()))
 
 
+def has_ai_writing_cliche(value: str) -> bool:
+    return bool(re.search(r"아니다[.!?]\s*(?:진짜|정답|본질|핵심)은|(?<!뿐 )(?<!뿐)아니라\s+.{1,35}(?:이다|다)[.!?]?|핵심은|(?:중요한 것|중요한 점)(?:은|이)?\s*.{0,45}(?:라는 것이다|라는 점이다)|결국 우리가 주목해야 할 것은|단순히 .{1,35}(?:를|을) 넘어|이 질문에 대한 답은 명확하다|새로운 패러다임|게임\s*체인저|시장(?:의)? 열기|완충재|포트폴리오(?:의)? 온도|성장 엔진", value, re.I))
+
+
 def sentences(value: str) -> list[str]:
     return [comparable(part) for part in re.split(r"(?<=[.!?])(?:[\"'”’\)\]]*)\s+", value.strip()) if len(comparable(part)) >= 15]
 
@@ -50,6 +54,8 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
             errors.append("표지 부제 글자 수가 중앙 기준을 벗어났습니다.")
         if comparable(title) == comparable(subtitle):
             errors.append("표지 제목과 부제가 중복됐습니다.")
+        if has_ai_writing_cliche(f"{title} {subtitle}"):
+            errors.append("표지에 상투적인 AI 문체가 포함됐습니다.")
 
     seen_titles: set[str] = set()
     seen_sentences: list[str] = []
@@ -72,6 +78,10 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
             errors.append(f"본문 {index} 제목과 내용이 중복됐습니다.")
         if re.search(r"src[_ ]?plus|무료로|더 자세한 이야기|페이지에서", body, re.I):
             errors.append(f"본문 {index}에 홍보·CTA 문구가 포함됐습니다.")
+        if has_ai_writing_cliche(f"{title} {body}"):
+            errors.append(f"본문 {index}에 상투적인 AI 문체가 포함됐습니다.")
+        if re.search(r"(?:습니다|합니다|됩니다|입니다)[.!?]?", f"{title} {body}"):
+            errors.append(f"본문 {index}이 존댓말 보고서 문체입니다.")
         for sentence in sentences(body):
             if any(len(cover_text) >= 15 and (cover_text in sentence or sentence in cover_text) for cover_text in [cover_title, cover_subtitle]):
                 errors.append(f"본문 {index}이 표지 문구를 반복했습니다.")
@@ -80,11 +90,16 @@ def validate_manifest(manifest: dict[str, Any], rules: dict[str, Any]) -> None:
             seen_sentences.append(sentence)
         seen_titles.add(normalized_title)
 
+    if sum("?" in str(page.get("title", "")) for page in bodies) > 2:
+        errors.append("본문 제목이 질문형으로 반복됩니다.")
+    if sum(bool(re.search(r"무엇(?:인가|일까)|이유는 무엇", str(page.get("title", "")))) for page in bodies) > 1:
+        errors.append("본문 제목에 '무엇인가' 형식이 반복됩니다.")
+
     if ctas:
         cta_subject = str(ctas[0].get("title", "")).strip()
         if len(cta_subject) > limits["cta_subject_max_chars"]:
             errors.append("CTA 주제 글자 수가 중앙 기준을 초과했습니다.")
-        if re.search(r"src[_ ]?plus|무료|만나보|리포트", cta_subject, re.I):
+        if re.search(r"src[_ ]?plus|무료|만나보|리포트|알아보|시작|계속|클릭", cta_subject, re.I):
             errors.append("CTA 주제에 홍보 문구가 포함됐습니다.")
     if errors:
         raise ValueError("카드뉴스 편집 기준 위반:\n- " + "\n- ".join(errors))

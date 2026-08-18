@@ -58,6 +58,12 @@ class EditorialRulesTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "표지 문구"):
             validate_manifest(manifest, self.rules)
 
+    def test_rejects_invented_market_metaphor(self) -> None:
+        manifest = valid_manifest()
+        manifest["pages"][1]["body"] = "증시의 시장 열기가 이어지는 동안 인프라는 포트폴리오의 완충재가 된다. 두 자산을 함께 담으면 변동성을 낮추는 데 도움이 된다."
+        with self.assertRaises(ValueError):
+            validate_manifest(manifest, self.rules)
+
 
 if __name__ == "__main__":
     unittest.main()

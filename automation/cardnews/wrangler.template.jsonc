@@ -28,7 +28,7 @@
         "queue": "cardnews-jobs",
         "max_batch_size": 1,
         "max_batch_timeout": 5,
-        "max_retries": 3,
+        "max_retries": 10,
         "dead_letter_queue": "cardnews-jobs-dlq"
       }
     ]
@@ -38,11 +38,31 @@
     "GITHUB_REPO": "SRC_Plus",
     "GITHUB_BRANCH": "main",
     "ALLOWED_CHAT_ID": "",
+    "FREE_ONLY_MODE": "true",
     "TEXT_MODEL": "@cf/meta/llama-4-scout-17b-16e-instruct",
+    "TEXT_FALLBACK_MODEL": "@cf/meta/llama-3.2-3b-instruct",
+    "TEXT_PROVIDER": "horde",
+    "HORDE_BASE_URL": "https://stablehorde.net/api",
+    "HORDE_TEXT_MODELS": "google/gemma-4-31b,koboldcpp/L3-Super-Nova-RP-8B",
+    "HORDE_IMAGE_MODELS": "ICBINP - I Can't Believe It's Not Photography,Realistic Vision,Flux.1-Schnell fp8 (Compact),stable_diffusion",
+    "HORDE_TIMEOUT_SECONDS": "90",
+    "HORDE_IMAGE_TIMEOUT_SECONDS": "150",
+    "HORDE_IMAGE_STEPS": "8",
+    "POLLINATIONS_BASE_URL": "https://image.pollinations.ai",
+    "POLLINATIONS_IMAGE_MODEL": "flux",
     "IMAGE_MODEL": "@cf/black-forest-labs/flux-2-klein-4b",
+    "IMAGE_FALLBACK_MODEL": "@cf/black-forest-labs/flux-1-schnell",
+    "IMAGE_PROVIDER": "pollinations",
+    "IMAGE_FALLBACK_PROVIDER": "horde",
+    "OPENVERSE_BASE_URL": "https://api.openverse.org/v1",
     "VISION_MODEL": "@cf/meta/llama-3.2-11b-vision-instruct",
-    "VISION_QA_MODE": "advisory",
-    "IMAGE_WIDTH": "768",
-    "IMAGE_HEIGHT": "1024"
+    "VISION_PROVIDER": "off",
+    "OPENAI_BASE_URL": "https://api.openai.com/v1",
+    "OPENAI_TEXT_MODEL": "gpt-4o-mini",
+    "OPENAI_IMAGE_MODEL": "gpt-image-1",
+    "OPENAI_VISION_MODEL": "gpt-4o-mini",
+    "VISION_QA_MODE": "off",
+    "IMAGE_WIDTH": "960",
+    "IMAGE_HEIGHT": "1280"
   }
 }
