@@ -1318,13 +1318,17 @@ async function handleQueue(batch: MessageBatch<QueueTask>, env: Env): Promise<vo
   }
 }
 
-async function showReports(env: Env, chatId: string): Promise<void> {
+async function showReports(env: Env, chatId: string, mode: 'chatgpt' | 'legacy' = 'chatgpt'): Promise<void> {
   const reports = (await listReports(env)).slice(0, 16);
   if (!reports.length) { await sendMessage(env, chatId, 'published=true인 최종 리포트를 찾지 못했습니다.'); return; }
   await env.DB.prepare("DELETE FROM file_choices WHERE created_at < datetime('now','-1 day')").run();
   const choices = reports.map((report) => ({ ...report, id: shortId(10) }));
   await env.DB.batch(choices.map((choice) => env.DB.prepare('INSERT INTO file_choices(choice_id,chat_id,source_path) VALUES(?,?,?)').bind(choice.id, chatId, choice.path)));
-  await sendMessage(env, chatId, '카드뉴스로 만들 리포트를 선택하세요.', choices.map((choice) => [{ text: `${choice.date} · ${clamp(choice.title, 42)}`, callback_data: `fs:${choice.id}` }]));
+  const action = mode === 'chatgpt' ? 'hs' : 'fs';
+  const intro = mode === 'chatgpt'
+    ? 'ChatGPT 작업 패킷으로 만들 Git 리포트를 선택하세요. 수정본과 보류 후 발행본도 현재 main의 published=true HTML에서 고를 수 있습니다.'
+    : '기존 무료 AI 경로로 만들 리포트를 선택하세요.';
+  await sendMessage(env, chatId, intro, choices.map((choice) => [{ text: `${choice.date} · ${clamp(choice.title, 42)}`, callback_data: `${action}:${choice.id}` }]));
 }
 async function showJobs(env: Env, chatId: string): Promise<void> {
   const result = await env.DB.prepare('SELECT * FROM jobs WHERE chat_id=? ORDER BY created_at DESC LIMIT 10').bind(chatId).all<JobRow>();
@@ -1412,7 +1416,8 @@ async function handleMessage(env: Env, message: TelegramMessage): Promise<void> 
   if (await handleChatGptJsonDocument(env, message)) return;
   if (await handleManualImageAttachment(env, message)) return;
   const command = text.split(/\s+/)[0].toLowerCase();
-  if (command === '/new' || command === '/새카드뉴스') return showReports(env, chatId);
+  if (command === '/new' || command === '/새카드뉴스') return showReports(env, chatId, 'chatgpt');
+  if (command === '/legacy') return showReports(env, chatId, 'legacy');
   if (command === '/jobs' || command === '/작업') return showJobs(env, chatId);
   if (command === '/retry' || command === '/재시도') {
     const job = await latestRecoverableJob(env, chatId);
@@ -1438,7 +1443,7 @@ async function handleMessage(env: Env, message: TelegramMessage): Promise<void> 
       return;
     }
   }
-  await sendMessage(env, chatId, '사용법\n/new — 게시된 HTML 리포트 선택\n/jobs — 최근 작업 확인\n\n수정 요청 버튼을 누른 뒤, 열린 입력창이나 다음 메시지에 수정 내용을 보내세요.');
+  await sendMessage(env, chatId, '사용법\n/new — ChatGPT 작업용 published HTML 선택\n/jobs — 최근 작업 확인\n/legacy — 기존 무료 AI 경로\n\n수정 요청 버튼을 누른 뒤, 열린 입력창이나 다음 메시지에 수정 내용을 보내세요.');
 }
 async function handleCallback(env: Env, query: NonNullable<TelegramUpdate['callback_query']>): Promise<void> {
   const chatId = String(query.message?.chat.id ?? query.from.id);
@@ -1451,6 +1456,15 @@ async function handleCallback(env: Env, query: NonNullable<TelegramUpdate['callb
     await updateJob(env, id, { status: 'CHATGPT_DRAFTING', last_error: null });
     await env.JOBS.send({ type: 'dispatch_parse', jobId: id });
     await sendMessage(env, chatId, `Git 원본 HTML을 확인하고 ChatGPT 작업 패킷을 준비합니다.\n작업: ${id}`);
+    return;
+  }
+  if (action === 'hs') {
+    const choice = await env.DB.prepare('SELECT source_path FROM file_choices WHERE choice_id=? AND chat_id=?').bind(id, chatId).first<{ source_path: string }>();
+    if (!choice) { await sendMessage(env, chatId, '선택 항목이 만료됐습니다. /new를 다시 실행하세요.'); return; }
+    const jobId = shortId(12);
+    await env.DB.prepare("INSERT INTO jobs(id,chat_id,source_path,status) VALUES(?,?,?,'CHATGPT_DRAFTING')").bind(jobId, chatId, choice.source_path).run();
+    await env.JOBS.send({ type: 'dispatch_parse', jobId });
+    await sendMessage(env, chatId, `선택한 Git 리포트의 ChatGPT 작업 패킷을 준비합니다 · ${jobId}\n${fileName(choice.source_path)}`);
     return;
   }
   if (action === 'fs') {

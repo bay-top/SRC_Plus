@@ -13,11 +13,12 @@ Cloudflare Workers AI 한도를 파이프라인의 전제조건으로 두지 않
 API 이미지 비용 대신 기존 ChatGPT 사용 범위 안에서 문안과 이미지를 만들 때는 Git → Telegram → ChatGPT → Telegram → PPTX 흐름을 사용한다.
 
 1. `main`에 `published=true`인 `reports_*.html`을 새로 추가하거나 수정하면 GitHub Actions가 Telegram에 알린다.
-2. Telegram에서 `ChatGPT 작업 패킷 준비`를 누르면 Worker가 Git 원본 HTML과 `editorial.json`, 작업 안내 파일을 보낸다.
-3. [chatgpt/SRC_PLUS_GPT_INSTRUCTIONS.md](chatgpt/SRC_PLUS_GPT_INSTRUCTIONS.md)를 전용 Custom GPT의 Instructions에 붙여 넣고, Telegram에서 받은 HTML과 `editorial.json`을 업로드한다.
-4. ChatGPT가 반환한 최종 JSON을 파일로 저장해 Telegram에 첨부한다. Worker가 문안·프롬프트 규칙을 검증한다.
-5. ChatGPT에서 검토·승인한 이미지를 Telegram 요청 순서대로 한 장씩 보낸다.
-6. 모든 승인 이미지가 도착하면 기존 GitHub Actions가 PPTX와 PNG ZIP을 만들고 Telegram에 전송한다.
+2. 새 등록 알림이 없어도 Telegram의 `/new`로 현재 `main`의 모든 `published=true` HTML 가운데 하나를 선택할 수 있다. 수정본과 보류 후 발행본도 같은 목록에 나타난다.
+3. Telegram에서 `ChatGPT 작업 패킷 준비`를 누르거나 `/new`에서 특정 리포트를 고르면 Worker가 Git 원본 HTML과 `editorial.json`, 작업 안내 파일을 보낸다.
+4. [chatgpt/SRC_PLUS_GPT_INSTRUCTIONS.md](chatgpt/SRC_PLUS_GPT_INSTRUCTIONS.md)를 전용 Custom GPT의 Instructions에 붙여 넣고, Telegram에서 받은 HTML과 `editorial.json`을 업로드한다.
+5. ChatGPT가 반환한 최종 JSON을 파일로 저장해 Telegram에 첨부한다. Worker가 문안·프롬프트 규칙을 검증한다.
+6. ChatGPT에서 검토·승인한 이미지를 Telegram 요청 순서대로 한 장씩 보낸다.
+7. 모든 승인 이미지가 도착하면 기존 GitHub Actions가 PPTX와 PNG ZIP을 만들고 Telegram에 전송한다.
 
 이 경로는 Custom GPT를 Git 이벤트로 무인 호출하지 않는다. Git·Telegram은 파일 전달과 상태 관리를 자동화하고, ChatGPT에서의 문안·이미지 생성과 최종 이미지는 사람이 검토한다. 새 Git 알림 workflow는 `CARDNEWS_WORKER_BASE_URL`, `CARDNEWS_CALLBACK_HMAC_SECRET` 두 기존 Secret을 사용한다.
 

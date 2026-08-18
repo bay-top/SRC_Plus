@@ -44,6 +44,8 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         self.assertIn("import_chatgpt_json", source)
         self.assertIn("MANUAL_IMAGE_UPLOADING", source)
         self.assertIn("storeManualImage", source)
+        self.assertIn("action === 'hs'", source)
+        self.assertIn("mode: 'chatgpt' | 'legacy'", source)
 
     def test_git_notification_workflow_only_notifies_added_or_modified_reports(self) -> None:
         workflow = (ROOT.parents[1] / ".github" / "workflows" / "cardnews-new-report-notify.yml").read_text(encoding="utf-8")
