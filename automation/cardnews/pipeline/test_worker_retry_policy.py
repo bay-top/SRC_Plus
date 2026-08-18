@@ -56,8 +56,10 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         self.assertIn("GPT_ACTION_TOKEN", source)
         self.assertIn("x-srcplus-action-key", source)
         self.assertIn("meta?.published", source)
-        self.assertIn("listPublishedReports", schema)
-        self.assertIn("getPublishedReportHtml", schema)
+        self.assertIn("listGitHubReportFiles", schema)
+        self.assertIn("getGitHubReportHtml", schema)
+        self.assertIn("api.github.com", schema)
+        self.assertIn("raw.githubusercontent.com", schema)
 
     def test_git_notification_workflow_only_notifies_added_or_modified_reports(self) -> None:
         workflow = (ROOT.parents[1] / ".github" / "workflows" / "cardnews-new-report-notify.yml").read_text(encoding="utf-8")

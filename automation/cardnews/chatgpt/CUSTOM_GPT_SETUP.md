@@ -26,13 +26,12 @@
 - **Code Interpreter & Data Analysis: 켬** — HTML과 JSON 파일을 읽고 저장하기 위해 사용
 - **Web Search: 끔** — 원문 밖의 사실을 임의로 보충하지 않게 함
 
-### Action: GitHub 발행 원문 조회
+### Action: GitHub 원문 직접 조회
 
 1. **Actions**에서 **Create new action**을 선택한다.
-2. `SRC_PLUS_GPT_ACTION.openapi.yaml`을 붙여 넣고, 서버 URL의 `https://REPLACE_WITH_CARDNEWS_WORKER_BASE_URL`을 실제 `CARDNEWS_WORKER_BASE_URL`로 바꾼다.
-3. Authentication은 **API Key / Custom header**를 고르고 header 이름을 `x-srcplus-action-key`로 설정한다.
-4. `GPT_ACTION_TOKEN` Worker Secret 값을 API key 값으로 입력한다. 이 값은 저장소나 대화에 기록하지 않는다.
-5. Actions Test에서 `listPublishedReports`와 `getPublishedReportHtml`을 각각 한 번 실행한다.
+2. `SRC_PLUS_GPT_ACTION.openapi.yaml`을 그대로 붙여 넣는다.
+3. Authentication은 **None**으로 둔다. 공개 GitHub 원문만 읽으므로 키가 필요 없다.
+4. Actions Test에서 `listGitHubReportFiles`와 `getGitHubReportHtml`을 각각 한 번 실행한다.
 
 ### Conversation starter
 

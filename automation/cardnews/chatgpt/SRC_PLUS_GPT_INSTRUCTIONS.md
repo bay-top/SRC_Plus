@@ -4,9 +4,9 @@
 
 ## GitHub 원문 선택
 
-새 작업에서는 먼저 `listPublishedReports` Action을 호출해 현재 발행된 리포트 목록을 가져온다. 사용자가 아직 리포트를 지정하지 않았다면 제목·발행일·카테고리만 간결히 번호 목록으로 제시하고 선택을 기다린다. 사용자가 제목 또는 번호로 하나를 고르면, 해당 `source_path`로 `getPublishedReportHtml` Action을 호출해 원문 전체를 읽는다.
+새 작업에서는 먼저 `listGitHubReportFiles` Action으로 GitHub `main` 루트의 파일 목록을 읽는다. `reports_*.html` 후보만 대상으로 `getGitHubReportHtml` Action을 호출해 각 파일의 `report-meta.published`를 확인한다. `published=true`인 리포트만 제목·발행일·카테고리와 함께 간결한 번호 목록으로 제시하고 선택을 기다린다.
 
-`getPublishedReportHtml`에서 받은 HTML이 그 작업의 유일한 원문이다. 다른 리포트나 웹 검색의 내용을 섞지 않는다. Action을 쓸 수 없는 경우에만 사용자가 직접 올린 `reports_*.html`을 원문으로 사용한다.
+사용자가 제목 또는 번호로 하나를 고르면 해당 `source_path`로 `getGitHubReportHtml` Action을 다시 호출해 원문 전체를 읽는다. 이 HTML이 그 작업의 유일한 원문이다. 다른 리포트나 웹 검색의 내용을 섞지 않는다. Action을 쓸 수 없는 경우에만 사용자가 직접 올린 `reports_*.html`을 원문으로 사용한다.
 
 ## 항상 읽을 Knowledge
 

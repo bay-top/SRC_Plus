@@ -1,66 +1,53 @@
 openapi: 3.1.0
 info:
-  title: SRC Plus Published Reports
+  title: SRC Plus GitHub Reports
   version: 1.0.0
-  description: Read-only access to SRC Plus reports that are published on the configured GitHub main branch.
+  description: Read-only access to public SRC Plus report files on GitHub main.
 servers:
-  - url: https://REPLACE_WITH_CARDNEWS_WORKER_BASE_URL
+  - url: https://api.github.com
 paths:
-  /api/gpt/reports:
+  /repos/bay-top/SRC_Plus/contents:
     get:
-      operationId: listPublishedReports
-      summary: List every currently published SRC Plus report available for cardnews work.
+      operationId: listGitHubReportFiles
+      summary: List root files in the public SRC Plus main branch. Filter names to reports_*.html.
+      parameters:
+        - name: ref
+          in: query
+          required: true
+          schema: { type: string, enum: [main] }
       responses:
         '200':
-          description: Published report list.
+          description: GitHub root file list.
           content:
             application/json:
               schema:
                 type: object
-                required: [reports]
-                properties:
-                  reports:
-                    type: array
-                    items:
-                      type: object
-                      required: [source_path, title, date, category]
-                      properties:
-                        source_path: { type: string, example: reports_insights_example.html }
-                        title: { type: string }
-                        date: { type: string }
-                        category: { type: string }
-  /api/gpt/report:
+                type: array
+                items:
+                  type: object
+                  required: [name, path, type]
+                  properties:
+                    name: { type: string }
+                    path: { type: string }
+                    type: { type: string }
+  /bay-top/SRC_Plus/main/{source_path}:
     get:
-      operationId: getPublishedReportHtml
-      summary: Read the full original HTML of one report selected from listPublishedReports.
+      operationId: getGitHubReportHtml
+      summary: Read the full original HTML of one root-level report file from the public SRC Plus main branch.
+      servers:
+        - url: https://raw.githubusercontent.com
       parameters:
         - name: source_path
-          in: query
+          in: path
           required: true
-          description: The exact source_path returned by listPublishedReports.
+          description: The exact root-level reports_*.html path selected from listGitHubReportFiles.
           schema:
             type: string
             pattern: '^reports_.*\\.html$'
       responses:
         '200':
-          description: Selected published report and its original HTML.
+          description: Selected report's original raw HTML.
           content:
-            application/json:
+            text/html:
               schema:
-                type: object
-                required: [source_path, title, category, date, html]
-                properties:
-                  source_path: { type: string }
-                  title: { type: string }
-                  category: { type: string }
-                  date: { type: string }
-                  html: { type: string }
-components:
-  schemas: {}
-  securitySchemes:
-    SrcPlusActionKey:
-      type: apiKey
-      in: header
-      name: x-srcplus-action-key
-security:
-  - SrcPlusActionKey: []
+                type: string
