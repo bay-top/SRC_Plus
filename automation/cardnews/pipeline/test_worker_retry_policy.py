@@ -44,6 +44,7 @@ class WorkerRetryPolicyTest(unittest.TestCase):
         self.assertIn("import_chatgpt_json", source)
         self.assertIn("MANUAL_IMAGE_UPLOADING", source)
         self.assertIn("storeManualImage", source)
+        self.assertIn("SRC_PLUS_GPT_INSTRUCTIONS.md", source)
         self.assertIn("action === 'hs'", source)
         self.assertIn("mode: 'chatgpt' | 'legacy'", source)
 

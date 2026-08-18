@@ -613,9 +613,11 @@ async function dispatchGithub(env: Env, action: 'parse' | 'render', jobId: strin
 
 async function sendChatGptPackage(env: Env, job: JobRow): Promise<void> {
   const html = await fetchGithubFileText(env, job.source_path);
+  const gptInstructions = await fetchGithubFileText(env, 'automation/cardnews/chatgpt/SRC_PLUS_GPT_INSTRUCTIONS.md');
   const handoff = `SRC Plus ChatGPT 작업 패킷\n\n1. ChatGPT에서 전용 SRC Plus GPT를 연다.\n2. 함께 전송된 HTML과 editorial.json을 업로드한다.\n3. GPT 지침에 따라 JSON만 출력하게 한다.\n4. JSON을 파일로 저장해 이 Telegram 채팅에 첨부한다.\n5. 봇이 문안·이미지 프롬프트를 검증한 뒤, 페이지별 최종 이미지를 한 장씩 요청한다.\n\n중요: JSON에는 표지 1장과 본문 4장, visual_style, visual_brief_ko, visual_prompt가 모두 포함돼야 한다. 이미지 프롬프트는 영어 110~150단어, 마지막 문장은 \"No readable text, numbers, logos, signage or watermark.\"여야 한다.`;
   await sendDocument(env, job.chat_id, new TextEncoder().encode(html), fileName(job.source_path), `ChatGPT에 업로드할 원본 HTML · ${job.id}`);
   await sendDocument(env, job.chat_id, new TextEncoder().encode(JSON.stringify(editorialRules, null, 2)), 'editorial.json', 'SRC Plus 중앙 문안·이미지 규칙');
+  await sendDocument(env, job.chat_id, new TextEncoder().encode(gptInstructions), 'SRC_PLUS_GPT_INSTRUCTIONS.md', 'Custom GPT Instructions 또는 일반 ChatGPT 대화에 함께 업로드할 상세 지침');
   await sendDocument(env, job.chat_id, new TextEncoder().encode(handoff), 'SRC_PLUS_CHATGPT_HANDOFF.md', 'ChatGPT 작업 순서');
   await registerAttachmentRequest(env, job.chat_id, job.id, 'import_chatgpt_json', `ChatGPT에서 나온 최종 JSON 파일을 이 채팅에 첨부하세요.\n작업: ${job.id}`);
 }
